@@ -140,7 +140,13 @@ fn run_tray(
         &mut model_ids,
     )?;
 
+    #[cfg(not(any(feature = "gec-tiny", feature = "gec-coedit", feature = "gec-llama")))]
+    let _ = (grammar_enabled, grammar_model);
+
+    #[cfg(any(feature = "gec-tiny", feature = "gec-coedit", feature = "gec-llama"))]
     let mut grammar_ids: Vec<(muda::MenuId, String)> = Vec::new();
+    #[cfg(not(any(feature = "gec-tiny", feature = "gec-coedit", feature = "gec-llama")))]
+    let grammar_ids: Vec<(muda::MenuId, String)> = Vec::new();
     #[cfg(any(feature = "gec-tiny", feature = "gec-coedit", feature = "gec-llama"))]
     let grammar_menu = {
         let grammar_menu = Submenu::new("Grammar correction (experimental)", true);

@@ -7,10 +7,10 @@ use std::thread;
 use crossbeam_channel::{Receiver, Sender, TryRecvError};
 use tracing::info;
 use windows::core::PCWSTR;
-use windows::Win32::Foundation::{COLORREF, HWND, HRGN, LPARAM, LRESULT, POINT, WPARAM};
+use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, CreatePen, CreateRoundRectRgn, CreateSolidBrush, DeleteObject, EndPaint,
-    FillRect, GetMonitorInfoW, InvalidateRect, MonitorFromPoint, RoundRect, SelectClipRgn,
+    FillRect, GetMonitorInfoW, HRGN, InvalidateRect, MonitorFromPoint, RoundRect, SelectClipRgn,
     SelectObject, MONITORINFO, MONITOR_DEFAULTTOPRIMARY, PAINTSTRUCT, PS_SOLID,
 };
 use windows::Win32::System::SystemInformation::GetTickCount64;

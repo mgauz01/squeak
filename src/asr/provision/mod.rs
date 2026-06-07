@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use crate::asr::engine::ModelDownloadError;
 use crate::config::{model_dir_for, AsrModelId, ModelTier};
 
-pub use moonshine::{MOONSHINE_REQUIRED_FILES, REQUIRED_MODEL_FILES};
+pub use moonshine::REQUIRED_MODEL_FILES;
 
 #[derive(Debug, Clone)]
 pub enum DownloadProgress {
