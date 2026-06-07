@@ -121,6 +121,8 @@ fn emit_gesture(output: GestureOutput) {
 fn gesture_to_event(output: GestureOutput) -> Option<AppEvent> {
     match output {
         GestureOutput::None => None,
+        GestureOutput::ArmMicrophone => Some(AppEvent::ArmRecording),
+        GestureOutput::DisarmMicrophone => Some(AppEvent::DisarmRecording),
         GestureOutput::StartPushToTalk => Some(AppEvent::StartRecording {
             mode: RecordingMode::PushToTalk,
         }),

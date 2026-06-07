@@ -60,6 +60,10 @@ impl AudioCapture {
     }
 
     pub fn start(&mut self) -> Result<(), AudioError> {
+        if self.stream.is_some() {
+            return Ok(());
+        }
+
         self.buffer.lock().unwrap().clear();
         if let Some(meter) = &self.level_meter {
             meter.reset();
@@ -133,6 +137,15 @@ impl AudioCapture {
 
     pub fn is_recording(&self) -> bool {
         self.stream.is_some()
+    }
+
+    /// Stop capture and discard buffered audio (e.g. after a short tap that never started PTT).
+    pub fn disarm(&mut self) {
+        self.stream = None;
+        self.buffer.lock().unwrap().clear();
+        if let Some(meter) = &self.level_meter {
+            meter.reset();
+        }
     }
 }
 

@@ -27,6 +27,8 @@ pub enum UserAction {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AppEvent {
+    ArmRecording,
+    DisarmRecording,
     StartRecording { mode: RecordingMode },
     StopRecording,
     CancelRecording,

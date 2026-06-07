@@ -7,10 +7,19 @@ fn ptt_hold_release_sequence() {
     assert_eq!(
         out,
         vec![
+            GestureOutput::ArmMicrophone,
             GestureOutput::StartPushToTalk,
             GestureOutput::StopPushToTalk
         ]
     );
+}
+
+#[test]
+fn short_tap_arms_and_disarms() {
+    let mut fsm = GestureFsm::default();
+    let out = fsm.simulate_tap(0);
+    assert!(out.contains(&GestureOutput::ArmMicrophone));
+    assert!(out.contains(&GestureOutput::DisarmMicrophone));
 }
 
 #[test]

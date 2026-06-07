@@ -14,7 +14,7 @@ use crate::audio::{
 };
 use crate::config::{AsrModelId, Config, GrammarModelId};
 use crate::hotkeys;
-use crate::output::{DeliveryChain, DeliveryError};
+use crate::output::{DeliveryChain, DeliveryError, DeliveryOutcome};
 use crate::platform::win::focus::FocusTarget;
 use crate::platform::win::process::foreground_process_name;
 use crate::postprocess::{self, GrammarWorker, InputContext, PostProcessOptions};
@@ -130,6 +130,14 @@ impl AppRuntime {
             return self.handle_set_grammar_profile(key);
         }
 
+        if matches!(event, AppEvent::ArmRecording) {
+            return self.arm_recording();
+        }
+
+        if matches!(event, AppEvent::DisarmRecording) {
+            return self.disarm_recording();
+        }
+
         let prev = self.state.state();
         let next = self.state.apply(event).map_err(RuntimeError::State)?;
         overlay::sync(&self.overlay_tx, next);
@@ -237,8 +245,41 @@ impl AppRuntime {
         Ok(())
     }
 
+    fn arm_recording(&mut self) -> Result<(), RuntimeError> {
+        if self.injection_target.is_none() {
+            self.injection_target = FocusTarget::capture();
+        }
+        if self.audio.is_none() {
+            self.audio = Some(
+                AudioCapture::try_new_with_meter(Some(Arc::clone(&self.audio_meter)))
+                    .map_err(RuntimeError::Audio)?,
+            );
+        }
+        self.audio
+            .as_mut()
+            .expect("audio just initialized")
+            .start()
+            .map_err(RuntimeError::Audio)
+    }
+
+    fn disarm_recording(&mut self) -> Result<(), RuntimeError> {
+        if matches!(
+            self.state.state(),
+            AppState::RecordingPtt | AppState::RecordingHandsFree
+        ) {
+            return Ok(());
+        }
+        if let Some(audio) = self.audio.as_mut() {
+            audio.disarm();
+        }
+        self.injection_target = None;
+        Ok(())
+    }
+
     fn start_recording(&mut self) -> Result<(), RuntimeError> {
-        self.injection_target = FocusTarget::capture();
+        if self.injection_target.is_none() {
+            self.injection_target = FocusTarget::capture();
+        }
         if self.audio.is_none() {
             self.audio = Some(
                 AudioCapture::try_new_with_meter(Some(Arc::clone(&self.audio_meter)))
@@ -268,6 +309,12 @@ impl AppRuntime {
             return self.fail_processing("empty audio");
         }
 
+        if stats.peak < 0.001 {
+            return self.fail_processing(
+                "no speech detected (microphone level too quiet — check mic input or speak closer)",
+            );
+        }
+
         if self.asr.is_downloading() {
             return self.fail_processing("model is still downloading");
         }
@@ -284,6 +331,12 @@ impl AppRuntime {
             other => RuntimeError::Message(other.to_string()),
         })?;
 
+        if raw.trim().is_empty() {
+            return self.fail_processing(
+                "no speech detected (recognizer returned empty — try speaking louder or holding Win+Ctrl a bit longer)",
+            );
+        }
+
         let context = foreground_process_name()
             .map(|name| postprocess::detect_context_from_process(&name))
             .unwrap_or(InputContext::Prose);
@@ -299,7 +352,9 @@ impl AppRuntime {
         );
 
         if text.is_empty() {
-            return self.fail_processing("empty transcript");
+            return self.fail_processing(&format!(
+                "empty transcript after cleanup (raw was {raw:?})"
+            ));
         }
 
         info!("Transcript: {text:?}");
@@ -321,6 +376,12 @@ impl AppRuntime {
             .apply(AppEvent::DeliveryComplete)
             .map_err(RuntimeError::State)?;
         overlay::sync(&self.overlay_tx, self.state.state());
+        match outcome {
+            DeliveryOutcome::Injected | DeliveryOutcome::PastedViaClipboard => {
+                eprintln!("Transcript pasted.");
+            }
+            DeliveryOutcome::CopiedToClipboard => {}
+        }
         info!("Delivery finished ({outcome:?})");
         Ok(())
     }

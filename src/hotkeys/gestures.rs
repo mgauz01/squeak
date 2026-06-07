@@ -7,6 +7,10 @@ use crate::timing;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GestureOutput {
     None,
+    /// Win+Ctrl pressed — start mic pre-roll before the 300 ms PTT threshold.
+    ArmMicrophone,
+    /// Short tap released before PTT — discard pre-roll without processing.
+    DisarmMicrophone,
     StartPushToTalk,
     StopPushToTalk,
     StartHandsFree,
@@ -100,7 +104,7 @@ impl GestureFsm {
                     is_second_tap: false,
                     toggling_off_hands_free: false,
                 };
-                GestureOutput::None
+                GestureOutput::ArmMicrophone
             }
             Phase::AwaitingSecondTap {
                 toggling_off_hands_free,
@@ -111,7 +115,7 @@ impl GestureFsm {
                     is_second_tap: true,
                     toggling_off_hands_free,
                 };
-                GestureOutput::None
+                GestureOutput::ArmMicrophone
             }
             Phase::HandsFree => {
                 self.phase = Phase::ComboHeld {
@@ -119,7 +123,7 @@ impl GestureFsm {
                     is_second_tap: false,
                     toggling_off_hands_free: true,
                 };
-                GestureOutput::None
+                GestureOutput::ArmMicrophone
             }
             Phase::ComboHeld { .. } | Phase::PushToTalk => GestureOutput::None,
         }
@@ -137,10 +141,11 @@ impl GestureFsm {
                         first_release_ms: now_ms,
                         toggling_off_hands_free,
                     };
+                    GestureOutput::DisarmMicrophone
                 } else {
                     self.phase = Phase::Idle;
+                    GestureOutput::None
                 }
-                GestureOutput::None
             }
             Phase::ComboHeld {
                 since_ms,
@@ -230,10 +235,29 @@ mod tests {
     use super::*;
 
     #[test]
-    fn short_tap_does_not_start_ptt() {
+    fn short_tap_arms_and_disarms_without_ptt() {
         let mut fsm = GestureFsm::default();
         let out = fsm.simulate_tap(0);
+        assert!(out.contains(&GestureOutput::ArmMicrophone));
+        assert!(out.contains(&GestureOutput::DisarmMicrophone));
         assert!(!out.contains(&GestureOutput::StartPushToTalk));
+    }
+
+    #[test]
+    fn hold_arms_then_starts_ptt() {
+        let mut fsm = GestureFsm::default();
+        let mut out = Vec::new();
+        push(
+            &mut out,
+            [
+                fsm.on_key(Key::Win, true, 0),
+                fsm.on_key(Key::Ctrl, true, 0),
+            ],
+        );
+        assert!(out.contains(&GestureOutput::ArmMicrophone));
+        push(&mut out, [fsm.on_tick(300)]);
+        assert!(out.contains(&GestureOutput::StartPushToTalk));
+        assert!(!out.contains(&GestureOutput::DisarmMicrophone));
     }
 
     #[test]

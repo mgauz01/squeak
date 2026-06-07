@@ -2,8 +2,8 @@ use windows::Win32::Foundation::HWND;
 use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
 use windows::Win32::UI::Input::KeyboardAndMouse::SetFocus;
 use windows::Win32::UI::WindowsAndMessaging::{
-    BringWindowToTop, GetForegroundWindow, GetGUIThreadInfo, GetWindowThreadProcessId,
-    GUITHREADINFO, SetForegroundWindow, ShowWindow, SW_SHOW,
+    BringWindowToTop, GetAncestor, GetForegroundWindow, GetGUIThreadInfo, GetWindowThreadProcessId,
+    GUITHREADINFO, GA_ROOT, SetForegroundWindow, ShowWindow, SW_SHOW,
 };
 
 /// Window that had keyboard focus when dictation started.
@@ -87,6 +87,40 @@ pub fn restore_focus(target: FocusTarget) -> bool {
         }
 
         fg_ok
+    }
+}
+
+/// True when the captured control (or its root window) currently has keyboard focus.
+pub fn is_target_focused(target: FocusTarget) -> bool {
+    unsafe {
+        let hwnd = target.hwnd();
+        if hwnd.0.is_null() {
+            return false;
+        }
+
+        let mut info = GUITHREADINFO {
+            cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
+            ..Default::default()
+        };
+        if GetGUIThreadInfo(0, &mut info).is_ok() && !info.hwndFocus.0.is_null() {
+            if info.hwndFocus == hwnd {
+                return true;
+            }
+            let focus_root = GetAncestor(info.hwndFocus, GA_ROOT);
+            let target_root = GetAncestor(hwnd, GA_ROOT);
+            if focus_root == target_root {
+                return true;
+            }
+        }
+
+        let foreground = GetForegroundWindow();
+        if foreground == hwnd {
+            return true;
+        }
+
+        let fg_root = GetAncestor(foreground, GA_ROOT);
+        let target_root = GetAncestor(hwnd, GA_ROOT);
+        fg_root == target_root
     }
 }
 

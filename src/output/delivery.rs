@@ -1,11 +1,16 @@
 use std::sync::Mutex;
 
+use std::thread;
+use std::time::Duration;
+
 use thiserror::Error;
 use tracing::{info, warn};
 
 use crate::output::clipboard::{self, ClipboardError};
 use crate::output::inject::{self, InjectError};
 use crate::platform::win::focus::{self, FocusTarget};
+
+const FOCUS_SETTLE_MS: u64 = 50;
 
 #[derive(Debug, Error)]
 pub enum DeliveryError {
@@ -22,6 +27,7 @@ pub enum DeliveryError {
 #[derive(Debug, PartialEq, Eq)]
 pub enum DeliveryOutcome {
     Injected,
+    PastedViaClipboard,
     CopiedToClipboard,
 }
 
@@ -53,6 +59,8 @@ impl DeliveryChain {
 
         let outcome = if try_inject(text, captured_focus) {
             DeliveryOutcome::Injected
+        } else if try_clipboard_paste(text, captured_focus) {
+            DeliveryOutcome::PastedViaClipboard
         } else {
             warn!("Could not inject at caret; copying transcript to clipboard");
             clipboard::set_text(text)?;
@@ -84,12 +92,33 @@ impl DeliveryChain {
 fn try_inject(text: &str, captured_focus: Option<FocusTarget>) -> bool {
     if let Some(target) = captured_focus {
         let _ = focus::restore_focus(target);
-        if inject::inject_unicode(text).is_ok() {
+        thread::sleep(Duration::from_millis(FOCUS_SETTLE_MS));
+        if focus::is_target_focused(target) && inject::inject_unicode(text).is_ok() {
             return true;
         }
     }
 
     if focus::has_text_focus() && inject::inject_unicode(text).is_ok() {
+        return true;
+    }
+
+    false
+}
+
+fn try_clipboard_paste(text: &str, captured_focus: Option<FocusTarget>) -> bool {
+    if clipboard::set_text(text).is_err() {
+        return false;
+    }
+
+    if let Some(target) = captured_focus {
+        let _ = focus::restore_focus(target);
+        thread::sleep(Duration::from_millis(FOCUS_SETTLE_MS));
+        if focus::is_target_focused(target) && inject::inject_paste().is_ok() {
+            return true;
+        }
+    }
+
+    if focus::has_text_focus() && inject::inject_paste().is_ok() {
         return true;
     }
 
