@@ -1,5 +1,5 @@
 use thiserror::Error;
-use windows::Win32::Foundation::{GlobalFree, HGLOBAL, HWND};
+use windows::Win32::Foundation::{GlobalFree, HGLOBAL, HANDLE, HWND};
 use windows::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, GetClipboardData, OpenClipboard, SetClipboardData,
 };
@@ -35,7 +35,7 @@ pub fn set_text(text: &str) -> Result<(), ClipboardError> {
         std::ptr::copy_nonoverlapping(wide.as_ptr(), locked as *mut u16, wide.len());
         let _ = GlobalUnlock(handle);
 
-        if SetClipboardData(CF_UNICODETEXT.0 as u32, HGLOBAL(handle.0)).is_err() {
+        if SetClipboardData(CF_UNICODETEXT.0 as u32, HANDLE(handle.0)).is_err() {
             let _ = GlobalFree(handle);
             let _ = CloseClipboard();
             return Err(ClipboardError::Failed("SetClipboardData failed".into()));
