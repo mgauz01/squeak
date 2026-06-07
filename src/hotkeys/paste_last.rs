@@ -1,1 +1,1 @@
-//! Win+Ctrl low-level hook — U6.
+//! Paste-last uses `RegisterHotKey` in `hotkeys/hook.rs` (Shift+Alt+Z).

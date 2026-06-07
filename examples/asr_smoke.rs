@@ -1,7 +1,7 @@
 //! Manual ASR smoke test on Windows:
 //!
 //! ```powershell
-//! cargo run --example asr_smoke --release -- path\to\16khz-mono.wav
+//! cargo run --example asr_smoke --release -- C:\path\to\your-recording.wav
 //! ```
 
 #[cfg(not(windows))]
@@ -29,7 +29,19 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let wav_path = env::args()
         .nth(1)
-        .ok_or("usage: asr_smoke <16kHz-mono-wav>")?;
+        .ok_or(
+            "usage: asr_smoke <path-to-16khz-mono.wav>\n\
+             example: cargo run --example asr_smoke --release -- C:\\Users\\you\\recording.wav",
+        )?;
+
+    let wav = Path::new(&wav_path);
+    if !wav.is_file() {
+        return Err(format!(
+            "WAV file not found: {wav_path}\n\
+             Replace the README placeholder with a real 16 kHz mono .wav on your machine."
+        )
+        .into());
+    }
 
     let config = squeak::config::Config::load();
     let worker = squeak::asr::AsrWorker::spawn(config.directml);
@@ -37,8 +49,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     println!("Ensuring model ({:?})...", config.model_tier);
     worker.ensure_ready(config.model_tier)?;
 
-    println!("Transcribing {wav_path}...");
-    let samples = load_wav_mono_16k(Path::new(&wav_path))?;
+    println!("Transcribing {}...", wav.display());
+    let samples = load_wav_mono_16k(wav)?;
     let text = worker.transcribe(samples)?;
     println!("Transcript: {text}");
     Ok(())

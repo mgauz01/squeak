@@ -1,4 +1,3 @@
-//! cpal microphone capture — implemented in U5.
-
-#[cfg(windows)]
 pub mod capture;
+
+pub use capture::{AudioCapture, AudioError, TARGET_SAMPLE_RATE};

@@ -28,7 +28,6 @@ fn main() {
 
 #[cfg(windows)]
 fn run_windows() -> Result<(), Box<dyn std::error::Error>> {
-    tracing::info!("Squeak starting (scaffold — full UI pipeline pending U3–U9)");
-    // Coordinator, tray, hooks, and ASR worker wired in later units.
-    Ok(())
+    let runtime = squeak::app::AppRuntime::start()?;
+    runtime.run()
 }
