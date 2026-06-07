@@ -1,12 +1,10 @@
 use thiserror::Error;
-use windows::Win32::Foundation::{HANDLE, HWND};
+use windows::Win32::Foundation::{GlobalFree, HGLOBAL, HWND};
 use windows::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, GetClipboardData, OpenClipboard, SetClipboardData,
-    CF_UNICODETEXT,
 };
-use windows::Win32::System::Memory::{
-    GlobalAlloc, GlobalFree, GlobalLock, GlobalUnlock, GMEM_MOVEABLE,
-};
+use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
+use windows::Win32::System::Ole::CF_UNICODETEXT;
 
 #[derive(Debug, Error)]
 pub enum ClipboardError {
@@ -37,7 +35,7 @@ pub fn set_text(text: &str) -> Result<(), ClipboardError> {
         std::ptr::copy_nonoverlapping(wide.as_ptr(), locked as *mut u16, wide.len());
         let _ = GlobalUnlock(handle);
 
-        if SetClipboardData(CF_UNICODETEXT.0 as u32, HANDLE(handle.0)).is_err() {
+        if SetClipboardData(CF_UNICODETEXT.0 as u32, HGLOBAL(handle.0)).is_err() {
             let _ = GlobalFree(handle);
             let _ = CloseClipboard();
             return Err(ClipboardError::Failed("SetClipboardData failed".into()));
@@ -55,19 +53,20 @@ pub fn get_text() -> Result<String, ClipboardError> {
         open_clipboard()?;
         let handle = GetClipboardData(CF_UNICODETEXT.0 as u32)
             .map_err(|e| clipboard_err("GetClipboardData", e))?;
-        if handle.0 == 0 {
+        if handle.0.is_null() {
             let _ = CloseClipboard();
             return Err(ClipboardError::Failed("clipboard empty".into()));
         }
 
-        let locked = GlobalLock(handle);
+        let hmem = HGLOBAL(handle.0);
+        let locked = GlobalLock(hmem);
         if locked.is_null() {
             let _ = CloseClipboard();
             return Err(ClipboardError::Failed("GlobalLock failed".into()));
         }
 
         let mut len = 0usize;
-        let mut cursor = locked as *const u16;
+        let cursor = locked as *const u16;
         while *cursor.add(len) != 0 {
             len += 1;
         }
@@ -75,7 +74,7 @@ pub fn get_text() -> Result<String, ClipboardError> {
         let text = String::from_utf16(slice)
             .map_err(|e| ClipboardError::Failed(format!("invalid UTF-16 in clipboard: {e}")))?;
 
-        let _ = GlobalUnlock(handle);
+        let _ = GlobalUnlock(hmem);
         CloseClipboard()
             .map_err(|e| clipboard_err("CloseClipboard", e))?;
         Ok(text)
@@ -87,8 +86,7 @@ fn text_to_wide(text: &str) -> Vec<u16> {
 }
 
 unsafe fn open_clipboard() -> Result<(), ClipboardError> {
-    OpenClipboard(HWND::default())
-        .map_err(|e| clipboard_err("OpenClipboard", e))
+    OpenClipboard(HWND::default()).map_err(|e| clipboard_err("OpenClipboard", e))
 }
 
 fn clipboard_err(op: &str, err: windows::core::Error) -> ClipboardError {

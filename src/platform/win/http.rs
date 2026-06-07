@@ -4,7 +4,7 @@ use std::io::{Read, Write};
 
 const USER_AGENT: &str = "Squeak/0.1";
 /// Moonshine / HF artifacts can be large; cap at 2 GiB per request.
-const MAX_BYTES: usize = 2 * 1024 * 1024 * 1024;
+const MAX_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
 pub fn stream_url_to_writer(
     url: &str,
