@@ -1,8 +1,21 @@
-//! Windows-only ASR engine (Moonshine ONNX) — implemented in U4.
+//! Automatic speech recognition — Moonshine Streaming via ONNX.
+
+pub mod engine;
 
 #[cfg(windows)]
-pub mod engine;
+mod model_download;
 #[cfg(windows)]
-pub mod model_download;
+mod moonshine;
 #[cfg(windows)]
-pub mod moonshine;
+mod worker;
+
+pub use engine::{AsrEngine, AsrError, MockAsrEngine, ModelDownloadError};
+
+#[cfg(windows)]
+pub use model_download::{
+    ensure_model, model_dir, model_is_complete, DownloadProgress, REQUIRED_MODEL_FILES,
+};
+#[cfg(windows)]
+pub use moonshine::{configure_ort_accelerator, MoonshineEngine};
+#[cfg(windows)]
+pub use worker::AsrWorker;

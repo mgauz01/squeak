@@ -1,12 +1,11 @@
 //! Squeak — local Windows voice dictation.
 
 pub mod app;
+pub mod asr;
 pub mod config;
 pub mod hotkeys;
 pub mod postprocess;
 
-#[cfg(windows)]
-pub mod asr;
 #[cfg(windows)]
 pub mod audio;
 #[cfg(windows)]
@@ -15,6 +14,8 @@ pub mod output;
 pub mod platform;
 #[cfg(windows)]
 pub mod ui;
+
+// asr is always available (trait + mock); Moonshine worker is Windows-only.
 
 /// Planning-default gesture timing (may be updated from spike doc).
 pub mod timing {
