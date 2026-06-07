@@ -20,15 +20,23 @@ path = "examples/asr_smoke.rs"
 required-features = []
 
 [[example]]
-name = "asr_bench"
-path = "examples/asr_bench.rs"
-required-features = []
+name = "gec_smoke"
+path = "examples/gec_smoke.rs"
+required-features = ["gec-tiny"]
+
+[[example]]
+name = "gec_bench"
+path = "examples/gec_bench.rs"
+required-features = ["gec-tiny", "gec-coedit"]
 
 [features]
 default = []
 parakeet = []
 cohere = []
 canary = []
+gec-tiny = ["dep:ort", "dep:tokenizers", "dep:ndarray"]
+gec-coedit = ["dep:ort", "dep:tokenizers", "dep:ndarray"]
+gec-llama = []
 directml = ["transcribe-rs/ort-directml"]
 
 [dependencies]
@@ -54,6 +62,9 @@ tao = "0.30"
 tauri-winrt-notification = "0.2"
 tray-icon = "0.19"
 transcribe-rs = { version = "0.3.11", features = ["onnx"] }
+ort = { version = "2.0.0-rc.12", optional = true, default-features = false, features = ["download-binaries", "ndarray"] }
+tokenizers = { version = "0.21", optional = true, default-features = false, features = ["onig"] }
+ndarray = { version = "0.16", optional = true }
 windows = { version = "0.58", features = [
     "Win32_Foundation",
     "Win32_UI_WindowsAndMessaging",

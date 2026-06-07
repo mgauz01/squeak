@@ -1,5 +1,7 @@
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+use super::grammar::GrammarModelId;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ModelTier {
@@ -194,6 +196,10 @@ impl<'de> Deserialize<'de> for AsrModelId {
 #[derive(Debug, Clone, Serialize)]
 pub struct Config {
     asr_model: AsrModelId,
+    #[serde(default)]
+    grammar_enabled: bool,
+    #[serde(default)]
+    grammar_model: GrammarModelId,
     #[serde(default = "default_true")]
     pub autostart: bool,
     #[serde(default)]
@@ -208,6 +214,10 @@ impl<'de> Deserialize<'de> for Config {
             asr_model: Option<AsrModelId>,
             #[serde(default)]
             model_tier: Option<ModelTier>,
+            #[serde(default)]
+            grammar_enabled: bool,
+            #[serde(default)]
+            grammar_model: GrammarModelId,
             #[serde(default = "default_true")]
             autostart: bool,
             #[serde(default)]
@@ -223,6 +233,8 @@ impl<'de> Deserialize<'de> for Config {
 
         Ok(Self {
             asr_model,
+            grammar_enabled: raw.grammar_enabled,
+            grammar_model: raw.grammar_model,
             autostart: raw.autostart,
             directml: raw.directml,
         })
@@ -237,6 +249,8 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             asr_model: AsrModelId::default(),
+            grammar_enabled: false,
+            grammar_model: GrammarModelId::default(),
             autostart: true,
             directml: false,
         }
@@ -250,6 +264,22 @@ impl Config {
 
     pub fn set_asr_model(&mut self, model: AsrModelId) {
         self.asr_model = model;
+    }
+
+    pub fn grammar_enabled(&self) -> bool {
+        self.grammar_enabled
+    }
+
+    pub fn grammar_model(&self) -> GrammarModelId {
+        self.grammar_model
+    }
+
+    pub fn set_grammar_enabled(&mut self, enabled: bool) {
+        self.grammar_enabled = enabled;
+    }
+
+    pub fn set_grammar_model(&mut self, model: GrammarModelId) {
+        self.grammar_model = model;
     }
 
     pub fn load() -> Self {
@@ -281,6 +311,8 @@ mod tests {
     fn default_config_values() {
         let cfg = Config::default();
         assert_eq!(cfg.asr_model(), AsrModelId::moonshine(ModelTier::Small));
+        assert!(!cfg.grammar_enabled());
+        assert_eq!(cfg.grammar_model(), GrammarModelId::Tiny);
         assert!(cfg.autostart);
         assert!(!cfg.directml);
     }
@@ -292,6 +324,21 @@ model_tier = "medium"
 "#;
         let cfg: Config = toml::from_str(raw).unwrap();
         assert_eq!(cfg.asr_model(), AsrModelId::moonshine(ModelTier::Medium));
+    }
+
+    #[test]
+    fn grammar_config_round_trip() {
+        let cfg = Config {
+            grammar_enabled: true,
+            grammar_model: GrammarModelId::Tiny,
+            ..Config::default()
+        };
+        let toml_str = toml::to_string(&cfg).unwrap();
+        assert!(toml_str.contains("grammar_enabled"));
+        assert!(toml_str.contains("grammar_model"));
+        let parsed: Config = toml::from_str(&toml_str).unwrap();
+        assert!(parsed.grammar_enabled());
+        assert_eq!(parsed.grammar_model(), GrammarModelId::Tiny);
     }
 
     #[test]

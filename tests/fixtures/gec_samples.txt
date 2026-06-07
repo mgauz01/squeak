@@ -1,0 +1,6 @@
+# ASR-like sentences for manual GEC benchmarking
+i goes to the store yesterday
+she dont know what time it is
+um we was thinking about the deadline
+they has been working on it all day
+he go to work every morning

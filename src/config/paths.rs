@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use super::model::{AsrModelId, ModelTier};
+use super::grammar::GrammarModelId;
 
 pub fn config_dir() -> PathBuf {
     dirs::config_dir()
@@ -20,6 +21,10 @@ pub fn models_dir() -> PathBuf {
 }
 
 pub fn model_dir_for(model: AsrModelId) -> PathBuf {
+    models_dir().join(model.directory_name())
+}
+
+pub fn grammar_model_dir_for(model: GrammarModelId) -> PathBuf {
     models_dir().join(model.directory_name())
 }
 

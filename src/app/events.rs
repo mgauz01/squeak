@@ -19,6 +19,8 @@ pub enum UserAction {
     SetAsrModel(String),
     /// Moonshine tier shortcut (`tiny` / `small` / `medium`).
     SetModelTier(String),
+    /// Grammar profile: `off`, `tiny`, `coedit`, or `llama` (feature-gated).
+    SetGrammarProfile(String),
     ToggleAutostart(bool),
     ToggleDirectMl(bool),
 }

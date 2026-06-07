@@ -8,7 +8,7 @@ use tracing::info;
 use tray_icon::{Icon, TrayIconBuilder};
 
 use crate::app::{AppEvent, UserAction};
-use crate::config::{AsrModelId, ModelTier};
+use crate::config::{AsrModelId, GrammarModelId, ModelTier};
 
 use windows::Win32::UI::WindowsAndMessaging::MSG;
 
@@ -16,11 +16,19 @@ pub fn spawn(
     event_tx: Sender<AppEvent>,
     running: Arc<AtomicBool>,
     initial_model: AsrModelId,
+    grammar_enabled: bool,
+    grammar_model: GrammarModelId,
 ) -> Result<(), Box<dyn std::error::Error>> {
     thread::Builder::new()
         .name("squeak-tray".into())
         .spawn(move || {
-            if let Err(err) = run_tray(event_tx, running, initial_model) {
+            if let Err(err) = run_tray(
+                event_tx,
+                running,
+                initial_model,
+                grammar_enabled,
+                grammar_model,
+            ) {
                 tracing::error!("tray thread failed: {err}");
                 eprintln!("Squeak tray failed: {err}");
             }
@@ -76,10 +84,25 @@ fn append_model_item(
     Ok(())
 }
 
+fn append_grammar_item(
+    menu: &Submenu,
+    label: &str,
+    key: &str,
+    checked: bool,
+    grammar_ids: &mut Vec<(muda::MenuId, String)>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let item = CheckMenuItem::new(label, true, checked, None);
+    grammar_ids.push((item.id().clone(), key.to_string()));
+    menu.append(&item)?;
+    Ok(())
+}
+
 fn run_tray(
     event_tx: Sender<AppEvent>,
     running: Arc<AtomicBool>,
     initial_model: AsrModelId,
+    grammar_enabled: bool,
+    grammar_model: GrammarModelId,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let icon = build_tray_icon()?;
 
@@ -117,8 +140,33 @@ fn run_tray(
         &mut model_ids,
     )?;
 
+    let mut grammar_ids = Vec::new();
+    #[cfg(any(feature = "gec-tiny", feature = "gec-coedit", feature = "gec-llama"))]
+    let grammar_menu = {
+        let grammar_menu = Submenu::new("Grammar correction (experimental)", true);
+        append_grammar_item(
+            &grammar_menu,
+            "Off",
+            "off",
+            !grammar_enabled,
+            &mut grammar_ids,
+        )?;
+        for model in GrammarModelId::all_models() {
+            append_grammar_item(
+                &grammar_menu,
+                model.menu_label(),
+                model.config_key(),
+                grammar_enabled && grammar_model == model,
+                &mut grammar_ids,
+            )?;
+        }
+        grammar_menu
+    };
+
     let menu = Menu::new();
     menu.append(&model_menu)?;
+    #[cfg(any(feature = "gec-tiny", feature = "gec-coedit", feature = "gec-llama"))]
+    menu.append(&grammar_menu)?;
     menu.append(&PredefinedMenuItem::separator())?;
     menu.append(&MenuItem::new("Hold Win+Ctrl to dictate", false, None))?;
     menu.append(&PredefinedMenuItem::separator())?;
@@ -148,6 +196,15 @@ fn run_tray(
                         model.config_key(),
                     )));
                     eprintln!("Switching speech model to {}…", model.tray_summary());
+                    return;
+                }
+            }
+            for (id, key) in &grammar_ids {
+                if *id == event.id() {
+                    let _ = event_tx_menu.send(AppEvent::UserAction(UserAction::SetGrammarProfile(
+                        key.clone(),
+                    )));
+                    eprintln!("Switching grammar profile to {key}…");
                     return;
                 }
             }

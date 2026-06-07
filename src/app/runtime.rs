@@ -12,7 +12,7 @@ use crate::asr::{AsrError, AsrWorker};
 use crate::audio::{
     log_audio_stats, maybe_write_debug_wav, peak_normalize, AudioCapture, AudioError,
 };
-use crate::config::{AsrModelId, Config};
+use crate::config::{AsrModelId, Config, GrammarModelId};
 use crate::hotkeys;
 use crate::output::{DeliveryChain, DeliveryError};
 use crate::platform::win::focus::FocusTarget;
@@ -25,6 +25,7 @@ pub struct AppRuntime {
     config: Config,
     events: Receiver<AppEvent>,
     asr: AsrWorker,
+    grammar: crate::postprocess::grammar::GrammarWorker,
     audio: Option<AudioCapture>,
     delivery: DeliveryChain,
     running: Arc<AtomicBool>,
@@ -38,6 +39,7 @@ impl AppRuntime {
         let single_instance = SingleInstance::acquire()?;
         let config = Config::load();
         let asr = AsrWorker::spawn(config.directml);
+        let grammar = crate::postprocess::grammar::GrammarWorker::spawn();
         let delivery = DeliveryChain::new();
 
         let (event_tx, events) = crossbeam_channel::unbounded();
@@ -46,7 +48,13 @@ impl AppRuntime {
 
         eprintln!("Squeak initializing (tray + hotkeys + overlay)...");
         hotkeys::spawn_hotkeys(event_tx.clone());
-        tray::spawn(event_tx.clone(), Arc::clone(&running), config.asr_model())?;
+        tray::spawn(
+            event_tx.clone(),
+            Arc::clone(&running),
+            config.asr_model(),
+            config.grammar_enabled(),
+            config.grammar_model(),
+        )?;
         overlay::spawn(overlay_rx, Arc::clone(&running))?;
 
         Ok(Self {
@@ -54,6 +62,7 @@ impl AppRuntime {
             config,
             events,
             asr,
+            grammar,
             audio: None,
             delivery,
             running,
@@ -66,6 +75,10 @@ impl AppRuntime {
     pub fn run(mut self) -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("Loading speech model in background (first launch may take a minute)...");
         self.asr.preload_in_background(self.config.asr_model());
+        if self.config.grammar_enabled() {
+            self.grammar
+                .preload_in_background(self.config.grammar_model());
+        }
 
         eprintln!("Hold Win+Ctrl to dictate. Shift+Alt+Z pastes last transcript. Orange circle in the taskbar = Squeak running.");
         eprintln!(
@@ -108,6 +121,10 @@ impl AppRuntime {
 
         if let AppEvent::UserAction(UserAction::SetModelTier(tier_name)) = &event {
             return self.handle_set_asr_model(tier_name);
+        }
+
+        if let AppEvent::UserAction(UserAction::SetGrammarProfile(key)) = &event {
+            return self.handle_set_grammar_profile(key);
         }
 
         let prev = self.state.state();
@@ -161,6 +178,44 @@ impl AppRuntime {
             model.tray_summary()
         );
         info!("Speech model changed to {}", model.config_key());
+        Ok(())
+    }
+
+    fn handle_set_grammar_profile(&mut self, key: &str) -> Result<(), RuntimeError> {
+        let key = key.trim().to_lowercase();
+        if key == "off" {
+            if !self.config.grammar_enabled() {
+                return Ok(());
+            }
+            self.config.set_grammar_enabled(false);
+            self.config.save().map_err(|e| RuntimeError::Message(e.to_string()))?;
+            eprintln!("Grammar correction disabled.");
+            info!("Grammar correction disabled");
+            return Ok(());
+        }
+
+        let model = GrammarModelId::parse(&key).ok_or_else(|| {
+            RuntimeError::Message(format!("unknown grammar profile: {key}"))
+        })?;
+
+        let unchanged = self.config.grammar_enabled() && self.config.grammar_model() == model;
+        if unchanged {
+            info!("Grammar profile already {}", model.config_key());
+            return Ok(());
+        }
+
+        self.config.set_grammar_enabled(true);
+        self.config.set_grammar_model(model);
+        self.config.save().map_err(|e| RuntimeError::Message(e.to_string()))?;
+        self.grammar
+            .reload(model)
+            .map_err(|e| RuntimeError::Message(e.to_string()))?;
+        self.grammar.preload_in_background(model);
+        eprintln!(
+            "Grammar correction set to {}. Download/load may take a minute on first use.",
+            model.tray_summary()
+        );
+        info!("Grammar profile changed to {}", model.config_key());
         Ok(())
     }
 
@@ -226,7 +281,16 @@ impl AppRuntime {
         let context = foreground_process_name()
             .map(|name| postprocess::detect_context_from_process(&name))
             .unwrap_or(InputContext::Prose);
-        let text = postprocess::postprocess(&raw, PostProcessOptions { context });
+        let options = PostProcessOptions {
+            context,
+            grammar_enabled: self.config.grammar_enabled(),
+        };
+        let text = postprocess::postprocess_with_worker(
+            &raw,
+            options,
+            Some(&self.grammar),
+            self.config.grammar_model(),
+        );
 
         if text.is_empty() {
             return self.fail_processing("empty transcript");
