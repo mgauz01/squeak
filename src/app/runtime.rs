@@ -14,7 +14,8 @@ use crate::audio::{
 };
 use crate::config::{Config, ModelTier};
 use crate::hotkeys;
-use crate::output::{DeliveryChain, DeliveryError, DeliveryOutcome};
+use crate::output::{DeliveryChain, DeliveryError};
+use crate::platform::win::focus::FocusTarget;
 use crate::platform::win::process::foreground_process_name;
 use crate::postprocess::{self, InputContext, PostProcessOptions};
 use crate::ui::{overlay, tray};
@@ -28,6 +29,7 @@ pub struct AppRuntime {
     delivery: DeliveryChain,
     running: Arc<AtomicBool>,
     overlay_tx: crossbeam_channel::Sender<overlay::OverlayMode>,
+    injection_target: Option<FocusTarget>,
     _single_instance: SingleInstance,
 }
 
@@ -56,6 +58,7 @@ impl AppRuntime {
             delivery,
             running,
             overlay_tx,
+            injection_target: None,
             _single_instance: single_instance,
         })
     }
@@ -121,6 +124,7 @@ impl AppRuntime {
                 if let Some(audio) = self.audio.as_mut() {
                     let _ = audio.stop();
                 }
+                self.injection_target = None;
                 info!("Recording cancelled");
             }
             _ => {}
@@ -168,6 +172,7 @@ impl AppRuntime {
     }
 
     fn start_recording(&mut self) -> Result<(), RuntimeError> {
+        self.injection_target = FocusTarget::capture();
         if self.audio.is_none() {
             self.audio = Some(AudioCapture::try_new().map_err(RuntimeError::Audio)?);
         }
@@ -219,30 +224,32 @@ impl AppRuntime {
             return self.fail_processing("empty transcript");
         }
 
-        let target = DeliveryChain::choose_target();
+        info!("Transcript: {text:?}");
+
         self.state
             .apply(AppEvent::TranscriptReady {
                 text: text.clone(),
-                target,
+                target: crate::app::DeliveryTarget::InjectAtCaret,
             })
             .map_err(RuntimeError::State)?;
 
+        let captured = self.injection_target.take();
         let outcome = self
             .delivery
-            .deliver(&text, target)
+            .deliver(&text, captured)
             .map_err(RuntimeError::Delivery)?;
 
-        let done = match outcome {
-            DeliveryOutcome::Buffered => AppEvent::DeliveryBuffered,
-            _ => AppEvent::DeliveryComplete,
-        };
-        self.state.apply(done).map_err(RuntimeError::State)?;
+        self.state
+            .apply(AppEvent::DeliveryComplete)
+            .map_err(RuntimeError::State)?;
         overlay::sync(&self.overlay_tx, self.state.state());
-        info!("Transcript delivered ({outcome:?})");
+        info!("Delivery finished ({outcome:?})");
         Ok(())
     }
 
     fn fail_processing(&mut self, message: &str) -> Result<(), RuntimeError> {
+        self.injection_target = None;
+        eprintln!("Dictation failed: {message}");
         warn!("Processing failed: {message}");
         self.state
             .apply(AppEvent::ProcessingFailed {

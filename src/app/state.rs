@@ -56,6 +56,10 @@ fn transition(from: AppState, event: &AppEvent) -> Option<AppState> {
         (Idle, StartRecording {
             mode: RecordingMode::HandsFree,
         }) => Some(RecordingHandsFree),
+        (Buffered, StartRecording { mode: RecordingMode::PushToTalk }) => Some(RecordingPtt),
+        (Buffered, StartRecording {
+            mode: RecordingMode::HandsFree,
+        }) => Some(RecordingHandsFree),
 
         (RecordingPtt, StopRecording) | (RecordingHandsFree, StopRecording) => Some(Processing),
 
@@ -137,6 +141,28 @@ mod tests {
         assert_eq!(sm.state(), AppState::Error);
         sm.apply(AppEvent::DismissError).unwrap();
         assert_eq!(sm.state(), AppState::Idle);
+    }
+
+    #[test]
+    fn buffered_allows_new_recording() {
+        let mut sm = StateMachine::new();
+        sm.apply(AppEvent::StartRecording {
+            mode: RecordingMode::PushToTalk,
+        })
+        .unwrap();
+        sm.apply(AppEvent::StopRecording).unwrap();
+        sm.apply(AppEvent::TranscriptReady {
+            text: "hello".into(),
+            target: DeliveryTarget::InjectAtCaret,
+        })
+        .unwrap();
+        sm.apply(AppEvent::DeliveryBuffered).unwrap();
+        assert_eq!(sm.state(), AppState::Buffered);
+        sm.apply(AppEvent::StartRecording {
+            mode: RecordingMode::PushToTalk,
+        })
+        .unwrap();
+        assert_eq!(sm.state(), AppState::RecordingPtt);
     }
 
     #[test]

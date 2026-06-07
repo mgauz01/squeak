@@ -3,10 +3,9 @@ use std::sync::Mutex;
 use thiserror::Error;
 use tracing::{info, warn};
 
-use crate::app::DeliveryTarget;
 use crate::output::clipboard::{self, ClipboardError};
 use crate::output::inject::{self, InjectError};
-use crate::platform::win::focus::has_text_focus;
+use crate::platform::win::focus::{self, FocusTarget};
 
 #[derive(Debug, Error)]
 pub enum DeliveryError {
@@ -20,11 +19,10 @@ pub enum DeliveryError {
     Clipboard(#[from] ClipboardError),
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum DeliveryOutcome {
     Injected,
     CopiedToClipboard,
-    Buffered,
 }
 
 pub struct DeliveryChain {
@@ -44,40 +42,26 @@ impl DeliveryChain {
         }
     }
 
-    pub fn choose_target() -> DeliveryTarget {
-        if has_text_focus() {
-            DeliveryTarget::InjectAtCaret
-        } else {
-            DeliveryTarget::BufferWithToast
-        }
-    }
-
-    pub fn deliver(&self, text: &str, target: DeliveryTarget) -> Result<DeliveryOutcome, DeliveryError> {
+    pub fn deliver(
+        &self,
+        text: &str,
+        captured_focus: Option<FocusTarget>,
+    ) -> Result<DeliveryOutcome, DeliveryError> {
         if text.is_empty() {
-            return Ok(DeliveryOutcome::Buffered);
+            return Ok(DeliveryOutcome::CopiedToClipboard);
         }
 
-        let outcome = match target {
-            DeliveryTarget::InjectAtCaret => match inject::inject_unicode(text) {
-                Ok(()) => DeliveryOutcome::Injected,
-                Err(e) => {
-                    warn!("SendInput failed ({e}); falling back to clipboard");
-                    clipboard::set_text(text)?;
-                    DeliveryOutcome::CopiedToClipboard
-                }
-            },
-            DeliveryTarget::ClipboardFallback => {
-                clipboard::set_text(text)?;
-                DeliveryOutcome::CopiedToClipboard
-            }
-            DeliveryTarget::BufferWithToast => DeliveryOutcome::Buffered,
+        let outcome = if try_inject(text, captured_focus) {
+            DeliveryOutcome::Injected
+        } else {
+            warn!("Could not inject at caret; copying transcript to clipboard");
+            clipboard::set_text(text)?;
+            eprintln!("Transcript copied to clipboard — press Ctrl+V to paste.");
+            DeliveryOutcome::CopiedToClipboard
         };
 
-        if matches!(outcome, DeliveryOutcome::Buffered) {
-            info!("Buffered transcript for unfocused delivery (toast pending U9)");
-        }
-
         *self.last_transcript.lock().unwrap() = Some(text.to_string());
+        info!("Transcript delivered ({outcome:?})");
         Ok(outcome)
     }
 
@@ -89,11 +73,25 @@ impl DeliveryChain {
             .clone()
             .ok_or(DeliveryError::NoLastTranscript)?;
 
-        let target = Self::choose_target();
-        self.deliver(&text, target)
+        self.deliver(&text, FocusTarget::capture())
     }
 
     pub fn last_transcript(&self) -> Option<String> {
         self.last_transcript.lock().unwrap().clone()
     }
+}
+
+fn try_inject(text: &str, captured_focus: Option<FocusTarget>) -> bool {
+    if let Some(target) = captured_focus {
+        let _ = focus::restore_focus(target);
+        if inject::inject_unicode(text).is_ok() {
+            return true;
+        }
+    }
+
+    if focus::has_text_focus() && inject::inject_unicode(text).is_ok() {
+        return true;
+    }
+
+    false
 }
