@@ -1,15 +1,15 @@
 use std::fs::{self, File};
-use std::io::{BufReader, Read, Write};
+use std::io::{BufReader, Write};
 use std::path::{Path, PathBuf};
 
 use flate2::read::GzDecoder;
-use reqwest::blocking::Client;
 use tar::Archive;
 use tracing::{info, warn};
 
 use crate::asr::engine::ModelDownloadError;
 use crate::asr::provision::DownloadProgress;
 use crate::config::ModelTier;
+use crate::platform::win::http;
 
 /// Artifacts required in each Moonshine model directory.
 pub const MOONSHINE_REQUIRED_FILES: &[&str] = &[
@@ -60,43 +60,19 @@ pub fn download_tarball_to_dir_optional(
     }
     fs::create_dir_all(target.parent().unwrap_or(Path::new(".")))?;
 
-    let client = Client::builder()
-        .user_agent("Squeak/0.1")
-        .build()
-        .map_err(|e| ModelDownloadError::Http(e.to_string()))?;
-
-    let mut response = client
-        .get(url)
-        .send()
-        .map_err(|e| ModelDownloadError::Http(e.to_string()))?;
-
-    if !response.status().is_success() {
-        return Err(ModelDownloadError::Http(format!(
-            "HTTP {} for {url}",
-            response.status()
-        )));
-    }
-
-    let total = response.content_length();
     let archive_path = target.with_extension("tar.gz.part");
     let mut archive_file = File::create(&archive_path)?;
     let mut downloaded: u64 = 0;
-    let mut buffer = [0u8; 64 * 1024];
 
-    loop {
-        let read = response
-            .read(&mut buffer)
-            .map_err(ModelDownloadError::Io)?;
-        if read == 0 {
-            break;
-        }
-        archive_file.write_all(&buffer[..read])?;
-        downloaded += read as u64;
+    http::stream_url_to_writer(url, &mut archive_file, |bytes, total| {
+        downloaded = bytes;
         progress(DownloadProgress::Downloading {
             downloaded,
             total,
         });
-    }
+    })
+    .map_err(ModelDownloadError::Http)?;
+
     archive_file.flush()?;
     drop(archive_file);
 

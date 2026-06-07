@@ -41,7 +41,6 @@ directml = ["transcribe-rs/ort-directml"]
 
 [dependencies]
 crossbeam-channel = "0.5"
-dirs = "5"
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 toml = "0.8"
@@ -49,17 +48,12 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [target.'cfg(windows)'.dependencies]
-arboard = "3"
 cpal = "0.15"
-enigo = "0.3"
 muda = "0.15"
 hound = "3"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "blocking"] }
+ureq = "3.3"
 flate2 = "1"
 tar = "0.4"
-rubato = "0.15"
-tao = "0.30"
-tauri-winrt-notification = "0.2"
 tray-icon = "0.19"
 transcribe-rs = { version = "0.3.11", features = ["onnx"] }
 ort = { version = "2.0.0-rc.12", optional = true, default-features = false, features = ["download-binaries", "ndarray"] }
@@ -72,11 +66,9 @@ windows = { version = "0.58", features = [
     "Win32_System_Threading",
     "Win32_System_LibraryLoader",
     "Win32_System_DataExchange",
+    "Win32_System_Memory",
+    "Win32_System_SystemInformation",
     "Win32_Graphics_Gdi",
-    "Win32_UI_Shell",
-    "Win32_Storage_FileSystem",
-    "Win32_System_Diagnostics_ToolHelp",
-    "Win32_Security",
 ] }
 
 [dev-dependencies]

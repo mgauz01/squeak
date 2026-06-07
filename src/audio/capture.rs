@@ -1,7 +1,6 @@
 use std::sync::{Arc, Mutex};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use rubato::{FftFixedIn, Resampler};
 use thiserror::Error;
 use tracing::warn;
 
@@ -172,35 +171,19 @@ fn resample_to_16k_mono(samples: &[f32], input_rate: u32) -> Result<Vec<f32>, Au
         return Ok(samples.to_vec());
     }
 
-    let ratio = TARGET_SAMPLE_RATE as f64 / input_rate as f64;
-    let output_len = ((samples.len() as f64) * ratio).ceil() as usize;
-    let mut resampler = FftFixedIn::<f32>::new(
-        input_rate as usize,
-        TARGET_SAMPLE_RATE as usize,
-        1024,
-        1,
-        1,
-    )
-    .map_err(|e| AudioError::Resample(e.to_string()))?;
-
+    let ratio = input_rate as f64 / TARGET_SAMPLE_RATE as f64;
+    let output_len = ((samples.len() as f64) / ratio).ceil() as usize;
     let mut out = Vec::with_capacity(output_len);
-    let mut pos = 0;
-    while pos < samples.len() {
-        let end = (pos + 1024).min(samples.len());
-        let chunk = &samples[pos..end];
-        let mut padded = chunk.to_vec();
-        if padded.len() < 1024 {
-            padded.resize(1024, 0.0);
-        }
-        let frames = vec![padded];
-        let resampled = resampler
-            .process(&frames, None)
-            .map_err(|e| AudioError::Resample(e.to_string()))?;
-        out.extend_from_slice(&resampled[0]);
-        pos = end;
+
+    for i in 0..output_len {
+        let src_pos = i as f64 * ratio;
+        let idx = src_pos as usize;
+        let frac = (src_pos - idx as f64) as f32;
+        let s0 = samples.get(idx).copied().unwrap_or(0.0);
+        let s1 = samples.get(idx + 1).copied().unwrap_or(s0);
+        out.push(s0 + frac * (s1 - s0));
     }
 
-    out.truncate(output_len);
     Ok(out)
 }
 
@@ -213,5 +196,12 @@ mod tests {
         let input = vec![0.0, 0.5, -0.5, 1.0];
         let out = resample_to_16k_mono(&input, 16_000).unwrap();
         assert_eq!(out, input);
+    }
+
+    #[test]
+    fn resample_48k_to_16k_length() {
+        let input: Vec<f32> = (0..4800).map(|i| (i as f32 * 0.001).sin()).collect();
+        let out = resample_to_16k_mono(&input, 48_000).unwrap();
+        assert_eq!(out.len(), 1600);
     }
 }

@@ -3,4 +3,6 @@
 #[cfg(windows)]
 pub mod focus;
 #[cfg(windows)]
+pub mod http;
+#[cfg(windows)]
 pub mod process;
