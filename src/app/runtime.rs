@@ -171,6 +171,9 @@ impl AppRuntime {
 
         let raw = self.asr.transcribe(samples).map_err(|e| match e {
             AsrError::EmptyAudio => RuntimeError::Message("empty audio".into()),
+            AsrError::AudioTooShort { samples, min } => RuntimeError::Message(format!(
+                "recording too short ({samples} samples; hold Win+Ctrl longer and speak before release — need at least {min})"
+            )),
             other => RuntimeError::Message(other.to_string()),
         })?;
 

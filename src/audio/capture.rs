@@ -28,6 +28,7 @@ pub enum AudioError {
 pub struct AudioCapture {
     buffer: Arc<Mutex<Vec<f32>>>,
     input_sample_rate: u32,
+    channels: u16,
     stream: Option<cpal::Stream>,
 }
 
@@ -45,6 +46,7 @@ impl AudioCapture {
         Ok(Self {
             buffer: Arc::new(Mutex::new(Vec::new())),
             input_sample_rate: config.sample_rate().0,
+            channels: config.channels(),
             stream: None,
         })
     }
@@ -62,6 +64,7 @@ impl AudioCapture {
             .map_err(|e| AudioError::Config(e.to_string()))?;
 
         self.input_sample_rate = config.sample_rate().0;
+        self.channels = config.channels();
         let buffer = Arc::clone(&self.buffer);
         let sample_format = config.sample_format();
         let stream_config: cpal::StreamConfig = config.clone().into();
@@ -104,7 +107,8 @@ impl AudioCapture {
     pub fn stop(&mut self) -> Result<Vec<f32>, AudioError> {
         self.stream = None;
         let raw = self.buffer.lock().unwrap().clone();
-        resample_to_16k_mono(&raw, self.input_sample_rate)
+        let mono = downmix_to_mono(&raw, self.channels);
+        resample_to_16k_mono(&mono, self.input_sample_rate)
     }
 
     pub fn is_recording(&self) -> bool {
@@ -114,6 +118,17 @@ impl AudioCapture {
 
 fn append_samples(buffer: &Arc<Mutex<Vec<f32>>>, data: &[f32]) {
     buffer.lock().unwrap().extend_from_slice(data);
+}
+
+fn downmix_to_mono(samples: &[f32], channels: u16) -> Vec<f32> {
+    let ch = channels.max(1) as usize;
+    if ch == 1 {
+        return samples.to_vec();
+    }
+    samples
+        .chunks(ch)
+        .map(|frame| frame.iter().sum::<f32>() / ch as f32)
+        .collect()
 }
 
 fn resample_to_16k_mono(samples: &[f32], input_rate: u32) -> Result<Vec<f32>, AudioError> {

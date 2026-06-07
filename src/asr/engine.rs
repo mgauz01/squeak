@@ -11,6 +11,9 @@ pub enum AsrError {
     #[error("empty audio buffer")]
     EmptyAudio,
 
+    #[error("recording too short ({samples} samples; need at least {min} at 16 kHz)")]
+    AudioTooShort { samples: usize, min: usize },
+
     #[error("model download failed: {0}")]
     Download(#[from] ModelDownloadError),
 
