@@ -5,7 +5,7 @@ use std::thread;
 use crossbeam_channel::Sender;
 use muda::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tracing::info;
-use tray_icon::{Icon, TrayIconBuilder};
+use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 
 use crate::app::{AppEvent, UserAction};
 
@@ -37,41 +37,68 @@ fn run_tray(
     menu.append(&PredefinedMenuItem::separator())?;
     menu.append(&MenuItem::new("Hold Win+Ctrl to dictate", false, None))?;
 
-    // Must stay alive for the lifetime of the tray icon.
-    let _tray = TrayIconBuilder::new()
-        .with_menu(Box::new(menu))
-        .with_tooltip("Squeak — voice dictation")
-        .with_icon(icon)
-        .build()?;
-
     let event_tx_menu = event_tx.clone();
-    MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
-        if exit_id == event.id() {
-            let _ = event_tx_menu.send(AppEvent::UserAction(UserAction::Exit));
+
+    // tray-icon requires a Win32 message pump on this thread *before* Shell_NotifyIcon
+    // reliably registers (see tauri-apps/tray-icon issue #90).
+    let mut tray: Option<TrayIcon> = None;
+    pump_tray_loop(&running, || {
+        if tray.is_some() {
+            return Ok(());
         }
-    }));
 
-    info!("Tray icon ready");
-    eprintln!("Squeak tray icon active — check the ^ overflow area in the taskbar if you do not see it.");
+        tray = Some(
+            TrayIconBuilder::new()
+                .with_menu(Box::new(menu))
+                .with_tooltip("Squeak — voice dictation")
+                .with_icon(icon)
+                .build()?,
+        );
 
-    pump_tray_loop(&running);
+        MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
+            if exit_id == event.id() {
+                let _ = event_tx_menu.send(AppEvent::UserAction(UserAction::Exit));
+            }
+        }));
+
+        info!("Tray icon ready");
+        eprintln!(
+            "Squeak tray icon active — check the ^ overflow area in the taskbar if you do not see it."
+        );
+        Ok(())
+    })?;
+
+    drop(tray);
     Ok(())
 }
 
 /// Windows requires a Win32 message pump on the tray thread or the icon never appears.
-fn pump_tray_loop(running: &AtomicBool) {
+fn pump_tray_loop(
+    running: &AtomicBool,
+    mut init: impl FnMut() -> Result<(), Box<dyn std::error::Error>>,
+) -> Result<(), Box<dyn std::error::Error>> {
     use windows::Win32::UI::WindowsAndMessaging::{
         DispatchMessageW, PeekMessageW, TranslateMessage, MSG, PM_REMOVE,
     };
+
+    let mut initialized = false;
 
     unsafe {
         let mut msg = MSG::default();
         while running.load(Ordering::Relaxed) {
             while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).into() {
-                TranslateMessage(&msg);
+                let _ = TranslateMessage(&msg);
                 DispatchMessageW(&msg);
             }
-            thread::sleep(std::time::Duration::from_millis(16));
+
+            if !initialized {
+                init()?;
+                initialized = true;
+            }
+
+            thread::sleep(std::time::Duration::from_millis(10));
         }
     }
+
+    Ok(())
 }

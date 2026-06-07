@@ -1,5 +1,3 @@
-use squeak::timing;
-
 fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
@@ -20,8 +18,8 @@ fn main() {
             "Squeak is a Windows tray application. \
              Run `cargo test` for portable modules. \
              (PTT min hold: {} ms, double-tap: {} ms)",
-            timing::PTT_MIN_HOLD_MS,
-            timing::DOUBLE_TAP_WINDOW_MS,
+            squeak::timing::PTT_MIN_HOLD_MS,
+            squeak::timing::DOUBLE_TAP_WINDOW_MS,
         );
         std::process::exit(0);
     }
