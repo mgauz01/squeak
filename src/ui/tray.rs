@@ -45,7 +45,7 @@ fn run_tray(
         .build()?;
 
     let event_tx_menu = event_tx.clone();
-    MenuEvent::set_event_handler(Some(move |event| {
+    MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
         if exit_id == event.id() {
             let _ = event_tx_menu.send(AppEvent::UserAction(UserAction::Exit));
         }
