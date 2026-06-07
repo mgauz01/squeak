@@ -1,3 +1,8 @@
+//! Moonshine Streaming ASR via ONNX (`transcribe-rs`).
+//!
+//! The streaming frontend expects fixed **1280-sample** chunks (`CHUNK_SIZE` in
+//! `transcribe-rs`). Partial tail chunks crash the Conv node unless padded to
+//! 1280 with silence before inference.
 use std::path::Path;
 use std::thread;
 
@@ -114,6 +119,15 @@ mod tests {
         let input = vec![0.5; 2560];
         let padded = pad_to_streaming_chunks(&input);
         assert_eq!(padded, input);
+    }
+
+    #[test]
+    fn single_tail_pad_only() {
+        let input = vec![1.0; 1284];
+        let padded = pad_to_streaming_chunks(&input);
+        assert_eq!(padded.len(), 2560);
+        assert_eq!(&padded[..1284], &input[..]);
+        assert!(padded[1284..].iter().all(|&v| v == 0.0));
     }
 }
 

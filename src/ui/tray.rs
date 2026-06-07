@@ -3,22 +3,24 @@ use std::sync::Arc;
 use std::thread;
 
 use crossbeam_channel::Sender;
-use muda::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
+use muda::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 use tracing::info;
 use tray_icon::{Icon, TrayIconBuilder};
 
 use crate::app::{AppEvent, UserAction};
+use crate::config::ModelTier;
 
 use windows::Win32::UI::WindowsAndMessaging::MSG;
 
 pub fn spawn(
     event_tx: Sender<AppEvent>,
     running: Arc<AtomicBool>,
+    initial_tier: ModelTier,
 ) -> Result<(), Box<dyn std::error::Error>> {
     thread::Builder::new()
         .name("squeak-tray".into())
         .spawn(move || {
-            if let Err(err) = run_tray(event_tx, running) {
+            if let Err(err) = run_tray(event_tx, running, initial_tier) {
                 tracing::error!("tray thread failed: {err}");
                 eprintln!("Squeak tray failed: {err}");
             }
@@ -60,40 +62,66 @@ fn build_tray_icon() -> Result<Icon, Box<dyn std::error::Error>> {
 fn run_tray(
     event_tx: Sender<AppEvent>,
     running: Arc<AtomicBool>,
+    initial_tier: ModelTier,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let icon = build_tray_icon()?;
 
     let exit_item = MenuItem::new("Exit", true, None);
     let exit_id = exit_item.id().clone();
+
+    let model_menu = Submenu::new(
+        format!("Speech model ({initial_tier:?})"),
+        true,
+    );
+    let mut tier_ids = Vec::new();
+    for tier in ModelTier::ALL {
+        let item = MenuItem::new(tier.menu_label(), true, None);
+        tier_ids.push((item.id().clone(), tier));
+        model_menu.append(&item)?;
+    }
+
     let menu = Menu::new();
-    menu.append(&exit_item)?;
+    menu.append(&model_menu)?;
     menu.append(&PredefinedMenuItem::separator())?;
     menu.append(&MenuItem::new("Hold Win+Ctrl to dictate", false, None))?;
+    menu.append(&PredefinedMenuItem::separator())?;
+    menu.append(&exit_item)?;
 
     let event_tx_menu = event_tx.clone();
 
     unsafe {
         let mut msg = MSG::default();
 
-        // tray-icon requires a Win32 message pump on this thread *before* Shell_NotifyIcon
-        // reliably registers (see tauri-apps/tray-icon issue #90).
         dispatch_pending_messages(&mut msg);
 
         let _tray = TrayIconBuilder::new()
             .with_menu(Box::new(menu))
-            .with_tooltip("Squeak — voice dictation")
+            .with_tooltip("Squeak — voice dictation (tray: Speech model for accuracy)")
             .with_icon(icon)
             .build()?;
 
         MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
             if exit_id == event.id() {
                 let _ = event_tx_menu.send(AppEvent::UserAction(UserAction::Exit));
+                return;
+            }
+            for (id, tier) in &tier_ids {
+                if *id == event.id() {
+                    let _ = event_tx_menu.send(AppEvent::UserAction(UserAction::SetModelTier(
+                        format!("{tier:?}").to_lowercase(),
+                    )));
+                    eprintln!("Switching speech model to {tier:?}…");
+                    return;
+                }
             }
         }));
 
         info!("Tray icon ready");
         eprintln!(
             "Squeak is in the system tray (orange ring). Dictation shows a pill at the top of the screen."
+        );
+        eprintln!(
+            "Speech model: {initial_tier:?} (default Small). Use tray → Speech model for Tiny/Medium."
         );
 
         while running.load(Ordering::Relaxed) {

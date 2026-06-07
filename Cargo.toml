@@ -19,6 +19,11 @@ name = "asr_smoke"
 path = "examples/asr_smoke.rs"
 required-features = []
 
+[[example]]
+name = "asr_bench"
+path = "examples/asr_bench.rs"
+required-features = []
+
 [features]
 default = []
 directml = ["transcribe-rs/ort-directml"]

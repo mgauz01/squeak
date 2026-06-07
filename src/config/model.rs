@@ -5,19 +5,23 @@ use serde::{Deserialize, Serialize};
 pub enum ModelTier {
     Tiny,
     Small,
+    Medium,
 }
 
 impl Default for ModelTier {
     fn default() -> Self {
-        Self::Tiny
+        Self::Small
     }
 }
 
 impl ModelTier {
+    pub const ALL: [Self; 3] = [Self::Tiny, Self::Small, Self::Medium];
+
     pub fn directory_name(self) -> &'static str {
         match self {
             Self::Tiny => "moonshine-tiny-streaming-en",
             Self::Small => "moonshine-small-streaming-en",
+            Self::Medium => "moonshine-medium-streaming-en",
         }
     }
 
@@ -25,6 +29,24 @@ impl ModelTier {
         match self {
             Self::Tiny => "https://blob.handy.computer/moonshine-tiny-streaming-en.tar.gz",
             Self::Small => "https://blob.handy.computer/moonshine-small-streaming-en.tar.gz",
+            Self::Medium => "https://blob.handy.computer/moonshine-medium-streaming-en.tar.gz",
+        }
+    }
+
+    pub fn menu_label(self) -> &'static str {
+        match self {
+            Self::Tiny => "Tiny (fastest, ~12% WER)",
+            Self::Small => "Small (recommended, ~8% WER)",
+            Self::Medium => "Medium (best accuracy, ~7% WER)",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_lowercase().as_str() {
+            "tiny" => Some(Self::Tiny),
+            "small" => Some(Self::Small),
+            "medium" => Some(Self::Medium),
+            _ => None,
         }
     }
 }
@@ -82,8 +104,28 @@ mod tests {
     #[test]
     fn default_config_values() {
         let cfg = Config::default();
-        assert_eq!(cfg.model_tier, ModelTier::Tiny);
+        assert_eq!(cfg.model_tier, ModelTier::Small);
         assert!(cfg.autostart);
         assert!(!cfg.directml);
+    }
+
+    #[test]
+    fn model_tier_serde_in_config() {
+        for tier in ModelTier::ALL {
+            let cfg = Config {
+                model_tier: tier,
+                ..Config::default()
+            };
+            let toml_str = toml::to_string(&cfg).unwrap();
+            let parsed: Config = toml::from_str(&toml_str).unwrap();
+            assert_eq!(parsed.model_tier, tier);
+        }
+    }
+
+    #[test]
+    fn model_tier_parse() {
+        assert_eq!(ModelTier::parse("small"), Some(ModelTier::Small));
+        assert_eq!(ModelTier::parse("Medium"), Some(ModelTier::Medium));
+        assert_eq!(ModelTier::parse("unknown"), None);
     }
 }

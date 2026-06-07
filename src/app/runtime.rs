@@ -9,8 +9,10 @@ use crate::app::{AppEvent, UserAction};
 use crate::app::single_instance::SingleInstance;
 use crate::app::state::{AppState, StateMachine, TransitionError};
 use crate::asr::{AsrError, AsrWorker};
-use crate::audio::{AudioCapture, AudioError};
-use crate::config::Config;
+use crate::audio::{
+    log_audio_stats, maybe_write_debug_wav, peak_normalize, AudioCapture, AudioError,
+};
+use crate::config::{Config, ModelTier};
 use crate::hotkeys;
 use crate::output::{DeliveryChain, DeliveryError, DeliveryOutcome};
 use crate::platform::win::process::foreground_process_name;
@@ -42,7 +44,7 @@ impl AppRuntime {
 
         eprintln!("Squeak initializing (tray + hotkeys + overlay)...");
         hotkeys::spawn_hotkeys(event_tx.clone());
-        tray::spawn(event_tx.clone(), Arc::clone(&running))?;
+        tray::spawn(event_tx.clone(), Arc::clone(&running), config.model_tier)?;
         overlay::spawn(overlay_rx, Arc::clone(&running))?;
 
         Ok(Self {
@@ -63,6 +65,7 @@ impl AppRuntime {
         self.asr.preload_in_background(self.config.model_tier);
 
         eprintln!("Hold Win+Ctrl to dictate. Shift+Alt+Z pastes last transcript. Orange circle in the taskbar = Squeak running.");
+        eprintln!("Using {:?} speech model — tray → Speech model to change tier (Small recommended).", self.config.model_tier);
         info!("Squeak running — hold Win+Ctrl to dictate, Shift+Alt+Z to paste last");
 
         while self.running.load(Ordering::Relaxed) {
@@ -91,6 +94,10 @@ impl AppRuntime {
 
         if matches!(event, AppEvent::UserAction(UserAction::PasteLast)) {
             return self.handle_paste_last();
+        }
+
+        if let AppEvent::UserAction(UserAction::SetModelTier(tier_name)) = &event {
+            return self.handle_set_model_tier(tier_name);
         }
 
         let prev = self.state.state();
@@ -122,6 +129,29 @@ impl AppRuntime {
         Ok(())
     }
 
+    fn handle_set_model_tier(&mut self, tier_name: &str) -> Result<(), RuntimeError> {
+        let tier = ModelTier::parse(tier_name).ok_or_else(|| {
+            RuntimeError::Message(format!("unknown model tier: {tier_name}"))
+        })?;
+
+        if self.config.model_tier == tier {
+            info!("Model tier already {tier:?}");
+            return Ok(());
+        }
+
+        self.config.model_tier = tier;
+        self.config.save().map_err(|e| RuntimeError::Message(e.to_string()))?;
+        self.asr
+            .reload(tier)
+            .map_err(|e| RuntimeError::Message(e.to_string()))?;
+        self.asr.preload_in_background(tier);
+        eprintln!(
+            "Speech model set to {tier:?}. Download/load may take a minute on first use."
+        );
+        info!("Model tier changed to {tier:?}");
+        Ok(())
+    }
+
     fn handle_paste_last(&self) -> Result<(), RuntimeError> {
         if matches!(
             self.state.state(),
@@ -149,13 +179,16 @@ impl AppRuntime {
     }
 
     fn process_recording(&mut self) -> Result<(), RuntimeError> {
-        let samples = self
+        let mut samples = self
             .audio
             .as_mut()
             .ok_or(RuntimeError::Message("microphone not available".into()))?
             .stop()
             .map_err(RuntimeError::Audio)?;
-        info!("Processing {} samples", samples.len());
+
+        let stats = peak_normalize(&mut samples);
+        log_audio_stats(stats);
+        maybe_write_debug_wav(&samples);
 
         if samples.is_empty() {
             return self.fail_processing("empty audio");
