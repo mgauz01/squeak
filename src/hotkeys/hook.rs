@@ -62,7 +62,9 @@ unsafe fn run_message_loop() -> Result<(), Box<dyn std::error::Error>> {
     let _ = HOTKEY_THREAD.set(GetCurrentThreadId());
 
     let hwnd = create_message_window()?;
-    SetTimer(Some(hwnd), GESTURE_TIMER_ID, GESTURE_TICK_MS, None)?;
+    if SetTimer(hwnd, GESTURE_TIMER_ID, GESTURE_TICK_MS, None) == 0 {
+        return Err("SetTimer failed".into());
+    }
     RegisterHotKey(hwnd, PASTE_LAST_ID, MOD_SHIFT | MOD_ALT, HOTKEY_VK_Z)?;
 
     let instance: HINSTANCE = GetModuleHandleW(None)?.into();

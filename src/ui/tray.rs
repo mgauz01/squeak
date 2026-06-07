@@ -5,7 +5,7 @@ use std::thread;
 use crossbeam_channel::Sender;
 use muda::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tracing::info;
-use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
+use tray_icon::{Icon, TrayIconBuilder};
 
 use crate::app::{AppEvent, UserAction};
 
@@ -28,6 +28,10 @@ fn run_tray(
     event_tx: Sender<AppEvent>,
     running: Arc<AtomicBool>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        DispatchMessageW, PeekMessageW, TranslateMessage, MSG, PM_REMOVE,
+    };
+
     let icon = Icon::from_rgba(vec![0xFF, 0xC0, 0x40, 0xFF].repeat(16 * 16), 16, 16)?;
 
     let exit_item = MenuItem::new("Exit", true, None);
@@ -41,46 +45,7 @@ fn run_tray(
 
     // tray-icon requires a Win32 message pump on this thread *before* Shell_NotifyIcon
     // reliably registers (see tauri-apps/tray-icon issue #90).
-    let mut tray: Option<TrayIcon> = None;
-    pump_tray_loop(&running, || {
-        if tray.is_some() {
-            return Ok(());
-        }
-
-        tray = Some(
-            TrayIconBuilder::new()
-                .with_menu(Box::new(menu))
-                .with_tooltip("Squeak — voice dictation")
-                .with_icon(icon)
-                .build()?,
-        );
-
-        MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
-            if exit_id == event.id() {
-                let _ = event_tx_menu.send(AppEvent::UserAction(UserAction::Exit));
-            }
-        }));
-
-        info!("Tray icon ready");
-        eprintln!(
-            "Squeak tray icon active — check the ^ overflow area in the taskbar if you do not see it."
-        );
-        Ok(())
-    })?;
-
-    drop(tray);
-    Ok(())
-}
-
-/// Windows requires a Win32 message pump on the tray thread or the icon never appears.
-fn pump_tray_loop(
-    running: &AtomicBool,
-    mut init: impl FnMut() -> Result<(), Box<dyn std::error::Error>>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    use windows::Win32::UI::WindowsAndMessaging::{
-        DispatchMessageW, PeekMessageW, TranslateMessage, MSG, PM_REMOVE,
-    };
-
+    let mut tray = None;
     let mut initialized = false;
 
     unsafe {
@@ -92,7 +57,24 @@ fn pump_tray_loop(
             }
 
             if !initialized {
-                init()?;
+                tray = Some(
+                    TrayIconBuilder::new()
+                        .with_menu(Box::new(menu))
+                        .with_tooltip("Squeak — voice dictation")
+                        .with_icon(icon)
+                        .build()?,
+                );
+
+                MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
+                    if exit_id == event.id() {
+                        let _ = event_tx_menu.send(AppEvent::UserAction(UserAction::Exit));
+                    }
+                }));
+
+                info!("Tray icon ready");
+                eprintln!(
+                    "Squeak tray icon active — check the ^ overflow area in the taskbar if you do not see it."
+                );
                 initialized = true;
             }
 
@@ -100,5 +82,6 @@ fn pump_tray_loop(
         }
     }
 
+    drop(tray);
     Ok(())
 }
