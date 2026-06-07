@@ -30,7 +30,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         .nth(1)
         .unwrap_or_else(|| "i goes to the store yesterday".to_string());
 
-    let worker = squeak::postprocess::grammar::GrammarWorker::spawn();
+    let worker = squeak::postprocess::GrammarWorker::spawn();
     let model = squeak::config::GrammarModelId::Tiny;
 
     println!("Ensuring grammar model ({})...", model.config_key());

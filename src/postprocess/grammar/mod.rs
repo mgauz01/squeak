@@ -18,7 +18,5 @@ mod coedit;
 #[cfg(all(windows, feature = "gec-llama"))]
 mod llama;
 
-pub use engine::MockGrammarPolisher;
-
 #[cfg(windows)]
 pub use worker::GrammarWorker;

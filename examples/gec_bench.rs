@@ -21,7 +21,7 @@ fn main() {
 #[cfg(windows)]
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     use squeak::config::GrammarModelId;
-    use squeak::postprocess::grammar::GrammarWorker;
+    use squeak::postprocess::GrammarWorker;
 
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())

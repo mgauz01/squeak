@@ -2,7 +2,7 @@ use std::path::Path;
 
 use crate::asr::engine::{AsrEngine, AsrError};
 use crate::asr::moonshine::MoonshineEngine;
-use crate::config::{AsrModelId, ModelTier};
+use crate::config::AsrModelId;
 
 #[cfg(feature = "parakeet")]
 use crate::asr::parakeet::ParakeetEngine;

@@ -8,7 +8,7 @@ use tracing::info;
 use tray_icon::{Icon, TrayIconBuilder};
 
 use crate::app::{AppEvent, UserAction};
-use crate::config::{AsrModelId, GrammarModelId, ModelTier};
+use crate::config::{AsrModelId, GrammarModelId};
 
 use windows::Win32::UI::WindowsAndMessaging::MSG;
 
@@ -140,7 +140,7 @@ fn run_tray(
         &mut model_ids,
     )?;
 
-    let mut grammar_ids = Vec::new();
+    let mut grammar_ids: Vec<(muda::MenuId, String)> = Vec::new();
     #[cfg(any(feature = "gec-tiny", feature = "gec-coedit", feature = "gec-llama"))]
     let grammar_menu = {
         let grammar_menu = Submenu::new("Grammar correction (experimental)", true);
@@ -243,6 +243,7 @@ unsafe fn dispatch_pending_messages(msg: &mut MSG) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::ModelTier;
 
     #[test]
     fn moonshine_tier_maps_to_asr_model() {

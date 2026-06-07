@@ -17,7 +17,7 @@ use crate::hotkeys;
 use crate::output::{DeliveryChain, DeliveryError};
 use crate::platform::win::focus::FocusTarget;
 use crate::platform::win::process::foreground_process_name;
-use crate::postprocess::{self, InputContext, PostProcessOptions};
+use crate::postprocess::{self, GrammarWorker, InputContext, PostProcessOptions};
 use crate::ui::{overlay, tray};
 
 pub struct AppRuntime {
@@ -25,7 +25,7 @@ pub struct AppRuntime {
     config: Config,
     events: Receiver<AppEvent>,
     asr: AsrWorker,
-    grammar: crate::postprocess::grammar::GrammarWorker,
+    grammar: GrammarWorker,
     audio: Option<AudioCapture>,
     delivery: DeliveryChain,
     running: Arc<AtomicBool>,
@@ -39,7 +39,7 @@ impl AppRuntime {
         let single_instance = SingleInstance::acquire()?;
         let config = Config::load();
         let asr = AsrWorker::spawn(config.directml);
-        let grammar = crate::postprocess::grammar::GrammarWorker::spawn();
+        let grammar = GrammarWorker::spawn();
         let delivery = DeliveryChain::new();
 
         let (event_tx, events) = crossbeam_channel::unbounded();

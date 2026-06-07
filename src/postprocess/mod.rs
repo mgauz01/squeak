@@ -6,6 +6,9 @@ mod punctuation;
 pub use context::{detect_context_from_process, InputContext};
 pub use grammar::engine::MockGrammarPolisher;
 
+#[cfg(windows)]
+pub use grammar::GrammarWorker;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PostProcessOptions {
     pub context: InputContext,
