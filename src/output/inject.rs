@@ -17,7 +17,7 @@ pub fn inject_unicode(text: &str) -> Result<(), InjectError> {
         return Ok(());
     }
 
-    let mut inputs: Vec<INPUT> = text
+    let inputs: Vec<INPUT> = text
         .chars()
         .flat_map(|ch| {
             [

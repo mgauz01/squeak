@@ -3,7 +3,7 @@ use std::sync::Mutex;
 use thiserror::Error;
 use tracing::{info, warn};
 
-use crate::app::events::DeliveryTarget;
+use crate::app::DeliveryTarget;
 use crate::output::clipboard::{self, ClipboardError};
 use crate::output::inject::{self, InjectError};
 use crate::platform::win::focus::has_text_focus;

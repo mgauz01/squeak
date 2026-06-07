@@ -10,17 +10,17 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::SystemInformation::GetTickCount64;
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    VIRTUAL_KEY, VK_CONTROL, VK_LCONTROL, VK_LWIN, VK_RCONTROL, VK_RWIN,
+    RegisterHotKey, UnregisterHotKey, VIRTUAL_KEY, MOD_ALT, MOD_SHIFT, VK_CONTROL, VK_LCONTROL,
+    VK_LWIN, VK_RCONTROL, VK_RWIN,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW,
-    PostThreadMessageW, RegisterClassW, RegisterHotKey, SetWindowsHookExW, TranslateMessage,
-    UnhookWindowsHookEx, UnregisterHotKey, HC_ACTION, HHOOK, KBDLLHOOKSTRUCT, MOD_ALT, MOD_SHIFT,
-    MSG, WH_KEYBOARD_LL, WM_HOTKEY, WM_KEYDOWN, WM_QUIT, WNDCLASSW, WS_EX_NOACTIVATE,
-    WS_EX_TOOLWINDOW, WS_OVERLAPPED,
+    PostThreadMessageW, RegisterClassW, SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx,
+    HC_ACTION, HHOOK, KBDLLHOOKSTRUCT, MSG, WH_KEYBOARD_LL, WM_HOTKEY, WM_KEYDOWN, WM_QUIT,
+    WNDCLASSW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_OVERLAPPED,
 };
 
-use crate::app::events::{AppEvent, RecordingMode, UserAction};
+use crate::app::{AppEvent, RecordingMode, UserAction};
 use crate::hotkeys::gestures::{GestureFsm, GestureOutput, Key};
 
 const PASTE_LAST_ID: i32 = 1;
@@ -28,9 +28,9 @@ const HOTKEY_VK_Z: u32 = 0x5A;
 
 static EVENT_TX: OnceLock<Sender<AppEvent>> = OnceLock::new();
 static HOTKEY_THREAD: OnceLock<u32> = OnceLock::new();
-static HOOK_HANDLE: OnceLock<HHOOK> = OnceLock::new();
 
 thread_local! {
+    static HOOK_HANDLE: RefCell<Option<HHOOK>> = const { RefCell::new(None) };
     static GESTURE_FSM: RefCell<GestureFsm> = RefCell::new(GestureFsm::default());
 }
 
@@ -62,7 +62,7 @@ unsafe fn run_message_loop() -> Result<(), Box<dyn std::error::Error>> {
 
     let instance: HINSTANCE = GetModuleHandleW(None)?.into();
     let hook = SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_proc), instance, 0)?;
-    let _ = HOOK_HANDLE.set(hook);
+    HOOK_HANDLE.with(|h| *h.borrow_mut() = Some(hook));
 
     info!("Win+Ctrl hook and Shift+Alt+Z paste-last registered");
 
@@ -98,8 +98,10 @@ unsafe extern "system" fn keyboard_proc(
         }
     }
 
-    let hook = HOOK_HANDLE.get().copied().unwrap_or_default();
-    CallNextHookEx(hook, code, wparam, lparam)
+    HOOK_HANDLE.with(|h| {
+        let hook = h.borrow().unwrap_or_default();
+        CallNextHookEx(hook, code, wparam, lparam)
+    })
 }
 
 fn emit_gesture(output: GestureOutput) {
@@ -136,10 +138,19 @@ fn send_event(event: AppEvent) {
     }
 }
 
+unsafe extern "system" fn message_window_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    DefWindowProcW(hwnd, msg, wparam, lparam)
+}
+
 unsafe fn create_message_window() -> Result<HWND, Box<dyn std::error::Error>> {
     let class_name: Vec<u16> = "SqueakHotkeyWindow\0".encode_utf16().collect();
     let wc = WNDCLASSW {
-        lpfnWndProc: Some(DefWindowProcW),
+        lpfnWndProc: Some(message_window_proc),
         lpszClassName: PCWSTR(class_name.as_ptr()),
         ..Default::default()
     };

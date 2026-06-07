@@ -1,13 +1,13 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::thread::{self, JoinHandle};
+use std::thread;
 
 use crossbeam_channel::Sender;
 use muda::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tracing::info;
 use tray_icon::{Icon, TrayIconBuilder, TrayIconEvent};
 
-use crate::app::events::{AppEvent, UserAction};
+use crate::app::{AppEvent, UserAction};
 
 pub fn spawn(
     event_tx: Sender<AppEvent>,
@@ -46,7 +46,7 @@ fn run_tray(
 
     while running.load(Ordering::Relaxed) {
         if let Ok(event) = MenuEvent::receiver().try_recv() {
-            if event.id() == exit_id {
+            if exit_id == event.id() {
                 let _ = event_tx.send(AppEvent::UserAction(UserAction::Exit));
             }
         }

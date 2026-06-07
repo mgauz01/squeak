@@ -2,10 +2,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crossbeam_channel::{Receiver, Sender};
+use crossbeam_channel::Receiver;
 use tracing::{error, info, warn};
 
-use crate::app::events::{AppEvent, UserAction};
+use crate::app::{AppEvent, UserAction};
 use crate::app::single_instance::SingleInstance;
 use crate::app::state::{AppState, StateMachine, TransitionError};
 use crate::asr::{AsrError, AsrWorker};

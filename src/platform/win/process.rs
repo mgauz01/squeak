@@ -1,6 +1,5 @@
 use std::path::Path;
 
-use windows::core::PCWSTR;
 use windows::Win32::Foundation::{CloseHandle, HWND};
 use windows::Win32::System::Threading::{
     OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,

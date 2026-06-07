@@ -96,7 +96,7 @@ impl AudioCapture {
 
         stream
             .play()
-            .map_err(|e| AudioError::PermissionDenied)?;
+            .map_err(|_| AudioError::PermissionDenied)?;
         self.stream = Some(stream);
         Ok(())
     }
