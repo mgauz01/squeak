@@ -3,7 +3,7 @@
 //! ```powershell
 //! cargo run --example asr_bench --release -- C:\path\to\16khz-mono.wav
 //! cargo run --example asr_bench --release -- clip.wav --models moonshine:tiny,moonshine:small
-//! cargo run --example asr_bench --features parakeet --release -- clip.wav --models parakeet
+//! cargo run --example asr_bench --features parakeet,cohere,canary --release -- clip.wav --models parakeet,cohere
 //! ```
 
 #[cfg(not(windows))]

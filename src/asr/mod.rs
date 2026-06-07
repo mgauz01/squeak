@@ -10,6 +10,10 @@ mod model_download;
 mod moonshine;
 #[cfg(all(windows, feature = "parakeet"))]
 mod parakeet;
+#[cfg(all(windows, feature = "cohere"))]
+mod cohere;
+#[cfg(all(windows, feature = "canary"))]
+mod canary;
 #[cfg(windows)]
 mod provision;
 #[cfg(windows)]
@@ -25,5 +29,9 @@ pub use model_download::{
 pub use moonshine::{configure_ort_accelerator, MoonshineEngine};
 #[cfg(all(windows, feature = "parakeet"))]
 pub use parakeet::ParakeetEngine;
+#[cfg(all(windows, feature = "cohere"))]
+pub use cohere::CohereEngine;
+#[cfg(all(windows, feature = "canary"))]
+pub use canary::CanaryEngine;
 #[cfg(windows)]
 pub use worker::AsrWorker;

@@ -5,6 +5,12 @@ mod moonshine;
 #[cfg(feature = "parakeet")]
 mod parakeet;
 
+#[cfg(feature = "cohere")]
+mod cohere;
+
+#[cfg(feature = "canary")]
+mod canary;
+
 use std::path::{Path, PathBuf};
 
 use crate::asr::engine::ModelDownloadError;
@@ -33,9 +39,9 @@ pub fn model_is_complete(model: AsrModelId, dir: &Path) -> bool {
         #[cfg(feature = "parakeet")]
         AsrModelId::Parakeet => parakeet::is_complete(dir),
         #[cfg(feature = "cohere")]
-        AsrModelId::Cohere => false,
+        AsrModelId::Cohere => cohere::is_complete(dir),
         #[cfg(feature = "canary")]
-        AsrModelId::Canary => false,
+        AsrModelId::Canary => canary::is_complete(dir),
     }
 }
 
@@ -68,12 +74,8 @@ pub fn ensure_model(
         #[cfg(feature = "parakeet")]
         AsrModelId::Parakeet => parakeet::download_and_extract(&target, url, &progress),
         #[cfg(feature = "cohere")]
-        AsrModelId::Cohere => Err(ModelDownloadError::Http(
-            "Cohere download not implemented yet".into(),
-        )),
+        AsrModelId::Cohere => cohere::download_and_extract(&target, url, &progress),
         #[cfg(feature = "canary")]
-        AsrModelId::Canary => Err(ModelDownloadError::Http(
-            "Canary download not implemented yet".into(),
-        )),
+        AsrModelId::Canary => canary::download_and_extract(&target, url, &progress),
     }
 }

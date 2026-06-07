@@ -45,6 +45,16 @@ pub fn download_tarball_to_dir(
     required_files: &[&str],
     progress: &impl Fn(DownloadProgress),
 ) -> Result<PathBuf, ModelDownloadError> {
+    download_tarball_to_dir_optional(target, url, required_files, &[], progress)
+}
+
+pub fn download_tarball_to_dir_optional(
+    target: &Path,
+    url: &str,
+    required_files: &[&str],
+    optional_files: &[&str],
+    progress: &impl Fn(DownloadProgress),
+) -> Result<PathBuf, ModelDownloadError> {
     if target.exists() {
         fs::remove_dir_all(target)?;
     }
@@ -91,7 +101,7 @@ pub fn download_tarball_to_dir(
     drop(archive_file);
 
     progress(DownloadProgress::Extracting);
-    extract_tarball(&archive_path, target, required_files)?;
+    extract_tarball_optional(&archive_path, target, required_files, optional_files)?;
 
     let _ = fs::remove_file(&archive_path);
 
@@ -109,6 +119,15 @@ pub fn extract_tarball(
     archive_path: &Path,
     target_dir: &Path,
     required_files: &[&str],
+) -> Result<(), ModelDownloadError> {
+    extract_tarball_optional(archive_path, target_dir, required_files, &[])
+}
+
+pub fn extract_tarball_optional(
+    archive_path: &Path,
+    target_dir: &Path,
+    required_files: &[&str],
+    optional_files: &[&str],
 ) -> Result<(), ModelDownloadError> {
     let file = File::open(archive_path)?;
     let decoder = GzDecoder::new(BufReader::new(file));
@@ -133,6 +152,13 @@ pub fn extract_tarball(
             return Err(ModelDownloadError::CorruptArchive);
         }
         fs::copy(&from, target_dir.join(name))?;
+    }
+
+    for name in optional_files {
+        let from = source_dir.join(name);
+        if from.is_file() {
+            fs::copy(&from, target_dir.join(name))?;
+        }
     }
 
     let _ = fs::remove_dir_all(&extract_root);

@@ -3,12 +3,12 @@ use std::sync::Arc;
 use std::thread;
 
 use crossbeam_channel::Sender;
-use muda::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
+use muda::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 use tracing::info;
 use tray_icon::{Icon, TrayIconBuilder};
 
 use crate::app::{AppEvent, UserAction};
-use crate::config::AsrModelId;
+use crate::config::{AsrModelId, ModelTier};
 
 use windows::Win32::UI::WindowsAndMessaging::MSG;
 
@@ -59,6 +59,23 @@ fn build_tray_icon() -> Result<Icon, Box<dyn std::error::Error>> {
     Ok(Icon::from_rgba(rgba, size, size)?)
 }
 
+fn append_model_item(
+    menu: &Submenu,
+    model: AsrModelId,
+    active: AsrModelId,
+    model_ids: &mut Vec<(muda::MenuId, AsrModelId)>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let item = CheckMenuItem::new(
+        model.menu_label(),
+        true,
+        model == active,
+        None,
+    );
+    model_ids.push((item.id().clone(), model));
+    menu.append(&item)?;
+    Ok(())
+}
+
 fn run_tray(
     event_tx: Sender<AppEvent>,
     running: Arc<AtomicBool>,
@@ -69,23 +86,36 @@ fn run_tray(
     let exit_item = MenuItem::new("Exit", true, None);
     let exit_id = exit_item.id().clone();
 
-    let model_menu = Submenu::new(
-        format!("Speech model ({})", initial_model.tray_summary()),
-        true,
-    );
+    let model_menu = Submenu::new("Speech model", true);
     let mut model_ids = Vec::new();
+
+    let moonshine_menu = Submenu::new("Moonshine", true);
     for model in AsrModelId::MOONSHINE_ALL {
-        let item = MenuItem::new(model.menu_label(), true, None);
-        model_ids.push((item.id().clone(), model));
-        model_menu.append(&item)?;
+        append_model_item(&moonshine_menu, model, initial_model, &mut model_ids)?;
     }
+    model_menu.append(&moonshine_menu)?;
+
     #[cfg(feature = "parakeet")]
-    {
-        let model = AsrModelId::Parakeet;
-        let item = MenuItem::new(model.menu_label(), true, None);
-        model_ids.push((item.id().clone(), model));
-        model_menu.append(&item)?;
-    }
+    append_model_item(
+        &model_menu,
+        AsrModelId::Parakeet,
+        initial_model,
+        &mut model_ids,
+    )?;
+    #[cfg(feature = "cohere")]
+    append_model_item(
+        &model_menu,
+        AsrModelId::Cohere,
+        initial_model,
+        &mut model_ids,
+    )?;
+    #[cfg(feature = "canary")]
+    append_model_item(
+        &model_menu,
+        AsrModelId::Canary,
+        initial_model,
+        &mut model_ids,
+    )?;
 
     let menu = Menu::new();
     menu.append(&model_menu)?;
@@ -150,5 +180,18 @@ unsafe fn dispatch_pending_messages(msg: &mut MSG) {
     while PeekMessageW(msg, None, 0, 0, PM_REMOVE).into() {
         let _ = TranslateMessage(msg);
         DispatchMessageW(msg);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn moonshine_tier_maps_to_asr_model() {
+        for tier in ModelTier::ALL {
+            let model = AsrModelId::moonshine(tier);
+            assert_eq!(model.moonshine_tier(), Some(tier));
+        }
     }
 }

@@ -6,6 +6,10 @@ use crate::config::{AsrModelId, ModelTier};
 
 #[cfg(feature = "parakeet")]
 use crate::asr::parakeet::ParakeetEngine;
+#[cfg(feature = "cohere")]
+use crate::asr::cohere::CohereEngine;
+#[cfg(feature = "canary")]
+use crate::asr::canary::CanaryEngine;
 
 /// Load the ONNX engine for `model` from `model_dir` (already verified on disk).
 #[cfg(windows)]
@@ -20,12 +24,8 @@ pub fn create_engine(
         #[cfg(feature = "parakeet")]
         AsrModelId::Parakeet => Ok(Box::new(ParakeetEngine::load_from_dir(model_dir)?)),
         #[cfg(feature = "cohere")]
-        AsrModelId::Cohere => Err(AsrError::Other(
-            "Cohere backend not implemented yet".into(),
-        )),
+        AsrModelId::Cohere => Ok(Box::new(CohereEngine::load_from_dir(model_dir)?)),
         #[cfg(feature = "canary")]
-        AsrModelId::Canary => Err(AsrError::Other(
-            "Canary backend not implemented yet".into(),
-        )),
+        AsrModelId::Canary => Ok(Box::new(CanaryEngine::load_from_dir(model_dir)?)),
     }
 }

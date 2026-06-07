@@ -100,9 +100,9 @@ impl AsrModelId {
             #[cfg(feature = "parakeet")]
             Self::Parakeet => Some("https://blob.handy.computer/parakeet-v3-int8.tar.gz"),
             #[cfg(feature = "cohere")]
-            Self::Cohere => Some("https://blob.handy.computer/cohere-transcribe-int8.tar.gz"),
+            Self::Cohere => Some("https://blob.handy.computer/cohere-int8.tar.gz"),
             #[cfg(feature = "canary")]
-            Self::Canary => None,
+            Self::Canary => Some("https://blob.handy.computer/canary-1b-v2.tar.gz"),
         }
     }
 
@@ -323,6 +323,36 @@ model_tier = "medium"
     fn asr_model_id_moonshine_tier() {
         let id = AsrModelId::moonshine(ModelTier::Small);
         assert_eq!(id.moonshine_tier(), Some(ModelTier::Small));
+    }
+
+    #[cfg(feature = "parakeet")]
+    #[test]
+    fn asr_model_id_parse_parakeet() {
+        assert_eq!(AsrModelId::parse("parakeet"), Some(AsrModelId::Parakeet));
+    }
+
+    #[cfg(feature = "cohere")]
+    #[test]
+    fn asr_model_id_parse_cohere() {
+        assert_eq!(AsrModelId::parse("cohere"), Some(AsrModelId::Cohere));
+    }
+
+    #[cfg(feature = "canary")]
+    #[test]
+    fn asr_model_id_parse_canary() {
+        assert_eq!(AsrModelId::parse("canary"), Some(AsrModelId::Canary));
+    }
+
+    #[cfg(feature = "cohere")]
+    #[test]
+    fn cohere_download_url_is_set() {
+        assert!(AsrModelId::Cohere.download_url().is_some());
+    }
+
+    #[cfg(feature = "canary")]
+    #[test]
+    fn canary_download_url_is_set() {
+        assert!(AsrModelId::Canary.download_url().is_some());
     }
 
     #[test]
