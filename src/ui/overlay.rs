@@ -7,19 +7,22 @@ use std::thread;
 use crossbeam_channel::{Receiver, Sender, TryRecvError};
 use tracing::info;
 use windows::core::PCWSTR;
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
+use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, CreateSolidBrush, DeleteObject, EndPaint, GetMonitorInfoW, MonitorFromPoint,
-    RoundRect, SelectObject, MONITORINFO, MONITOR_DEFAULTTOPRIMARY, PAINTSTRUCT, RGB,
+    BeginPaint, CreateSolidBrush, DeleteObject, EndPaint, GetMonitorInfoW, InvalidateRect,
+    MonitorFromPoint, RoundRect, SelectObject, MONITORINFO, MONITOR_DEFAULTTOPRIMARY, PAINTSTRUCT,
 };
+use windows::Win32::System::SystemInformation::GetTickCount64;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DispatchMessageW, GetSystemMetrics, GetTickCount64,
-    GetWindowLongPtrW, InvalidateRect, PeekMessageW, RegisterClassW, SetTimer, SetWindowLongPtrW,
-    SetWindowPos, ShowWindow, TranslateMessage, CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA,
-    HWND_TOPMOST, MSG, PM_REMOVE, SM_CXSCREEN, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-    SWP_SHOWWINDOW, SW_HIDE, SW_SHOW, WM_DESTROY, WM_PAINT, WM_TIMER, WNDCLASSW,
-    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    CreateWindowExW, DefWindowProcW, DispatchMessageW, GetSystemMetrics, GetWindowLongPtrW,
+    PeekMessageW, RegisterClassW, SetTimer, SetWindowLongPtrW, SetWindowPos, ShowWindow,
+    TranslateMessage, CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA, HWND_TOPMOST, MSG, PM_REMOVE,
+    SM_CXSCREEN, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SW_HIDE, SW_SHOW,
+    WM_DESTROY, WM_PAINT, WM_TIMER, WNDCLASSW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
+    WS_POPUP,
 };
+
+use crate::app::AppState;
 
 const OVERLAY_WIDTH: i32 = 168;
 const OVERLAY_HEIGHT: i32 = 44;
@@ -49,13 +52,10 @@ pub fn spawn(
     Ok(())
 }
 
-pub fn sync(tx: &Sender<OverlayMode>, state: crate::app::state::AppState) {
+pub fn sync(tx: &Sender<OverlayMode>, state: AppState) {
     let mode = match state {
-        crate::app::state::AppState::RecordingPtt
-        | crate::app::state::AppState::RecordingHandsFree => OverlayMode::Recording,
-        crate::app::state::AppState::Processing | crate::app::state::AppState::Injecting => {
-            OverlayMode::Processing
-        }
+        AppState::RecordingPtt | AppState::RecordingHandsFree => OverlayMode::Recording,
+        AppState::Processing | AppState::Injecting => OverlayMode::Processing,
         _ => OverlayMode::Hidden,
     };
     let _ = tx.send(mode);
@@ -150,7 +150,7 @@ unsafe fn primary_monitor_top_center() -> (i32, i32) {
         cbSize: std::mem::size_of::<MONITORINFO>() as u32,
         ..Default::default()
     };
-    if GetMonitorInfoW(monitor, &mut info).is_ok() {
+    if GetMonitorInfoW(monitor, &mut info).0 != 0 {
         let work = info.rcWork;
         let x = work.left + (work.right - work.left - OVERLAY_WIDTH) / 2;
         let y = work.top + OVERLAY_TOP_MARGIN;
@@ -214,14 +214,14 @@ unsafe fn paint_overlay(hwnd: HWND, hdc: windows::Win32::Graphics::Gdi::HDC) {
         bottom: OVERLAY_HEIGHT,
     };
 
-    let bg = CreateSolidBrush(RGB(16, 16, 16));
+    let bg = CreateSolidBrush(colorref(16, 16, 16));
     let old = SelectObject(hdc, bg);
     let _ = RoundRect(hdc, rect.left, rect.top, rect.right, rect.bottom, 22, 22);
     let _ = SelectObject(hdc, old);
     let _ = DeleteObject(bg);
 
     let tick = GetTickCount64();
-    let bar_brush = CreateSolidBrush(RGB(245, 245, 245));
+    let bar_brush = CreateSolidBrush(colorref(245, 245, 245));
     let old = SelectObject(hdc, bar_brush);
 
     let bar_w = 6;
@@ -245,4 +245,8 @@ unsafe fn paint_overlay(hwnd: HWND, hdc: windows::Win32::Graphics::Gdi::HDC) {
 
     let _ = SelectObject(hdc, old);
     let _ = DeleteObject(bar_brush);
+}
+
+fn colorref(r: u8, g: u8, b: u8) -> COLORREF {
+    COLORREF((r as u32) | ((g as u32) << 8) | ((b as u32) << 16))
 }
