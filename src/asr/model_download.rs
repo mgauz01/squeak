@@ -7,7 +7,7 @@ use reqwest::blocking::Client;
 use tar::Archive;
 use tracing::{info, warn};
 
-use crate::config::{ModelTier, paths};
+use crate::config::{model_dir as config_model_dir, ModelTier};
 use crate::asr::engine::ModelDownloadError;
 
 /// Artifacts required in each model directory (see plan U4).
@@ -30,7 +30,7 @@ pub enum DownloadProgress {
 }
 
 pub fn model_dir(tier: ModelTier) -> PathBuf {
-    paths::model_dir(tier)
+    config_model_dir(tier)
 }
 
 pub fn model_is_complete(dir: &Path) -> bool {

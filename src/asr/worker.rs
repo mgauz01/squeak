@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 
 use crossbeam_channel::{Receiver, Sender};
-use tracing::{error, info};
+use tracing::info;
 
 use crate::asr::engine::{AsrEngine, AsrError};
 use crate::asr::model_download::{ensure_model, DownloadProgress};
