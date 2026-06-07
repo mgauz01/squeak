@@ -26,11 +26,42 @@ pub fn spawn(
     Ok(())
 }
 
+fn build_tray_icon() -> Result<Icon, Box<dyn std::error::Error>> {
+    let size = 16u32;
+    let mut rgba = vec![0u8; (size * size * 4) as usize];
+    let center = 7.5f32;
+    let outer = 7.0f32;
+    let inner = 4.5f32;
+
+    for y in 0..size {
+        for x in 0..size {
+            let dx = x as f32 + 0.5 - center;
+            let dy = y as f32 + 0.5 - center;
+            let dist = (dx * dx + dy * dy).sqrt();
+            let i = ((y * size + x) * 4) as usize;
+            if dist <= outer {
+                rgba[i] = 0xFF;
+                rgba[i + 1] = 0xA0;
+                rgba[i + 2] = 0x20;
+                rgba[i + 3] = 0xFF;
+            }
+            if dist <= inner {
+                rgba[i] = 0x20;
+                rgba[i + 1] = 0x20;
+                rgba[i + 2] = 0x20;
+                rgba[i + 3] = 0xFF;
+            }
+        }
+    }
+
+    Ok(Icon::from_rgba(rgba, size, size)?)
+}
+
 fn run_tray(
     event_tx: Sender<AppEvent>,
     running: Arc<AtomicBool>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let icon = Icon::from_rgba(vec![0xFF, 0xC0, 0x40, 0xFF].repeat(16 * 16), 16, 16)?;
+    let icon = build_tray_icon()?;
 
     let exit_item = MenuItem::new("Exit", true, None);
     let exit_id = exit_item.id().clone();
@@ -62,7 +93,7 @@ fn run_tray(
 
         info!("Tray icon ready");
         eprintln!(
-            "Squeak tray icon active — check the ^ overflow area in the taskbar if you do not see it."
+            "Squeak is in the system tray (orange ring). Dictation shows a pill at the top of the screen."
         );
 
         while running.load(Ordering::Relaxed) {

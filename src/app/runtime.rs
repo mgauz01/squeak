@@ -15,7 +15,7 @@ use crate::hotkeys;
 use crate::output::{DeliveryChain, DeliveryError, DeliveryOutcome};
 use crate::platform::win::process::foreground_process_name;
 use crate::postprocess::{self, InputContext, PostProcessOptions};
-use crate::ui::tray;
+use crate::ui::{overlay, tray};
 
 pub struct AppRuntime {
     state: StateMachine,
@@ -25,6 +25,7 @@ pub struct AppRuntime {
     audio: Option<AudioCapture>,
     delivery: DeliveryChain,
     running: Arc<AtomicBool>,
+    overlay_tx: crossbeam_channel::Sender<overlay::OverlayMode>,
     _single_instance: SingleInstance,
 }
 
@@ -36,11 +37,13 @@ impl AppRuntime {
         let delivery = DeliveryChain::new();
 
         let (event_tx, events) = crossbeam_channel::unbounded();
+        let (overlay_tx, overlay_rx) = crossbeam_channel::unbounded();
         let running = Arc::new(AtomicBool::new(true));
 
-        eprintln!("Squeak initializing (tray + hotkeys)...");
+        eprintln!("Squeak initializing (tray + hotkeys + overlay)...");
         hotkeys::spawn_hotkeys(event_tx.clone());
         tray::spawn(event_tx.clone(), Arc::clone(&running))?;
+        overlay::spawn(overlay_rx, Arc::clone(&running))?;
 
         Ok(Self {
             state: StateMachine::new(),
@@ -50,6 +53,7 @@ impl AppRuntime {
             audio: None,
             delivery,
             running,
+            overlay_tx,
             _single_instance: single_instance,
         })
     }
@@ -58,7 +62,7 @@ impl AppRuntime {
         eprintln!("Loading speech model in background (first launch may take a minute)...");
         self.asr.preload_in_background(self.config.model_tier);
 
-        eprintln!("Hold Win+Ctrl to dictate. Shift+Alt+Z pastes last transcript. Tray menu → Exit to quit.");
+        eprintln!("Hold Win+Ctrl to dictate. Shift+Alt+Z pastes last transcript. Orange circle in the taskbar = Squeak running.");
         info!("Squeak running — hold Win+Ctrl to dictate, Shift+Alt+Z to paste last");
 
         while self.running.load(Ordering::Relaxed) {
@@ -81,6 +85,7 @@ impl AppRuntime {
     fn handle_event(&mut self, event: AppEvent) -> Result<(), RuntimeError> {
         if matches!(event, AppEvent::UserAction(UserAction::Exit)) {
             self.running.store(false, Ordering::Relaxed);
+            overlay::sync(&self.overlay_tx, self.state.state());
             return Ok(());
         }
 
@@ -90,6 +95,7 @@ impl AppRuntime {
 
         let prev = self.state.state();
         let next = self.state.apply(event).map_err(RuntimeError::State)?;
+        overlay::sync(&self.overlay_tx, next);
 
         match (prev, next) {
             (_, AppState::RecordingPtt | AppState::RecordingHandsFree) => {
@@ -195,6 +201,7 @@ impl AppRuntime {
             _ => AppEvent::DeliveryComplete,
         };
         self.state.apply(done).map_err(RuntimeError::State)?;
+        overlay::sync(&self.overlay_tx, self.state.state());
         info!("Transcript delivered ({outcome:?})");
         Ok(())
     }
@@ -209,6 +216,7 @@ impl AppRuntime {
         self.state
             .apply(AppEvent::DismissError)
             .map_err(RuntimeError::State)?;
+        overlay::sync(&self.overlay_tx, self.state.state());
         Ok(())
     }
 }
