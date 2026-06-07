@@ -73,6 +73,10 @@ fn transition(from: AppState, event: &AppEvent) -> Option<AppState> {
 
         (Injecting, DeliveryComplete) => Some(Idle),
         (Injecting, DeliveryBuffered) => Some(Buffered),
+        (Injecting, StartRecording { mode: RecordingMode::PushToTalk }) => Some(RecordingPtt),
+        (Injecting, StartRecording {
+            mode: RecordingMode::HandsFree,
+        }) => Some(RecordingHandsFree),
 
         (Buffered, DeliveryComplete) | (Buffered, DismissError) => Some(Idle),
 
@@ -158,6 +162,28 @@ mod tests {
         .unwrap();
         sm.apply(AppEvent::DeliveryBuffered).unwrap();
         assert_eq!(sm.state(), AppState::Buffered);
+        sm.apply(AppEvent::StartRecording {
+            mode: RecordingMode::PushToTalk,
+        })
+        .unwrap();
+        assert_eq!(sm.state(), AppState::RecordingPtt);
+    }
+
+    #[test]
+    fn injecting_recovers_on_new_recording() {
+        let mut sm = StateMachine::new();
+        sm.apply(AppEvent::StartRecording {
+            mode: RecordingMode::PushToTalk,
+        })
+        .unwrap();
+        sm.apply(AppEvent::StopRecording).unwrap();
+        sm.apply(AppEvent::TranscriptReady {
+            text: "hello".into(),
+            target: DeliveryTarget::InjectAtCaret,
+        })
+        .unwrap();
+        assert_eq!(sm.state(), AppState::Injecting);
+
         sm.apply(AppEvent::StartRecording {
             mode: RecordingMode::PushToTalk,
         })

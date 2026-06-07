@@ -10,7 +10,7 @@ use crate::output::clipboard::{self, ClipboardError};
 use crate::output::inject::{self, InjectError};
 use crate::platform::win::focus::{self, FocusTarget};
 
-const FOCUS_SETTLE_MS: u64 = 50;
+const FOCUS_SETTLE_MS: u64 = 75;
 
 #[derive(Debug, Error)]
 pub enum DeliveryError {
@@ -29,6 +29,8 @@ pub enum DeliveryOutcome {
     Injected,
     PastedViaClipboard,
     CopiedToClipboard,
+    /// Transcript saved internally; automatic paste and clipboard both failed.
+    SavedOnly,
 }
 
 pub struct DeliveryChain {
@@ -48,13 +50,11 @@ impl DeliveryChain {
         }
     }
 
-    pub fn deliver(
-        &self,
-        text: &str,
-        captured_focus: Option<FocusTarget>,
-    ) -> Result<DeliveryOutcome, DeliveryError> {
+    /// Inject at the captured caret when possible. Always saves `text` for paste-last.
+    /// Does not fail after a successful transcript — worst case returns `SavedOnly`.
+    pub fn deliver(&self, text: &str, captured_focus: Option<FocusTarget>) -> DeliveryOutcome {
         if text.is_empty() {
-            return Ok(DeliveryOutcome::CopiedToClipboard);
+            return DeliveryOutcome::CopiedToClipboard;
         }
 
         let outcome = if try_inject(text, captured_focus) {
@@ -63,14 +63,25 @@ impl DeliveryChain {
             DeliveryOutcome::PastedViaClipboard
         } else {
             warn!("Could not inject at caret; copying transcript to clipboard");
-            clipboard::set_text(text)?;
-            eprintln!("Transcript copied to clipboard — press Ctrl+V to paste.");
-            DeliveryOutcome::CopiedToClipboard
+            match clipboard::set_text(text) {
+                Ok(()) => {
+                    eprintln!(
+                        "Could not paste automatically — transcript copied to clipboard (Ctrl+V)."
+                    );
+                    DeliveryOutcome::CopiedToClipboard
+                }
+                Err(err) => {
+                    eprintln!(
+                        "Paste failed ({err}) — press Shift+Alt+Z to retry once focus is in your text field."
+                    );
+                    DeliveryOutcome::SavedOnly
+                }
+            }
         };
 
         *self.last_transcript.lock().unwrap() = Some(text.to_string());
         info!("Transcript delivered ({outcome:?})");
-        Ok(outcome)
+        outcome
     }
 
     pub fn paste_last(&self) -> Result<DeliveryOutcome, DeliveryError> {
@@ -81,7 +92,7 @@ impl DeliveryChain {
             .clone()
             .ok_or(DeliveryError::NoLastTranscript)?;
 
-        self.deliver(&text, FocusTarget::capture())
+        Ok(self.deliver(&text, FocusTarget::capture()))
     }
 
     pub fn last_transcript(&self) -> Option<String> {
@@ -91,10 +102,12 @@ impl DeliveryChain {
 
 fn try_inject(text: &str, captured_focus: Option<FocusTarget>) -> bool {
     if let Some(target) = captured_focus {
-        let _ = focus::restore_focus(target);
+        let restored = focus::restore_focus(target);
         thread::sleep(Duration::from_millis(FOCUS_SETTLE_MS));
-        if focus::is_target_focused(target) && inject::inject_unicode(text).is_ok() {
-            return true;
+        if inject::inject_unicode(text).is_ok() {
+            if focus::is_target_focused(target) || restored {
+                return true;
+            }
         }
     }
 
@@ -111,10 +124,12 @@ fn try_clipboard_paste(text: &str, captured_focus: Option<FocusTarget>) -> bool 
     }
 
     if let Some(target) = captured_focus {
-        let _ = focus::restore_focus(target);
+        let restored = focus::restore_focus(target);
         thread::sleep(Duration::from_millis(FOCUS_SETTLE_MS));
-        if focus::is_target_focused(target) && inject::inject_paste().is_ok() {
-            return true;
+        if inject::inject_paste().is_ok() {
+            if focus::is_target_focused(target) || restored {
+                return true;
+            }
         }
     }
 

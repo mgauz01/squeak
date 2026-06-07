@@ -94,6 +94,7 @@ impl AppRuntime {
             match self.events.recv_timeout(Duration::from_millis(100)) {
                 Ok(event) => {
                     if let Err(err) = self.handle_event(event) {
+                        eprintln!("Squeak error: {err}");
                         warn!("event error: {err}");
                     }
                 }
@@ -367,10 +368,7 @@ impl AppRuntime {
             .map_err(RuntimeError::State)?;
 
         let captured = self.injection_target.take();
-        let outcome = self
-            .delivery
-            .deliver(&text, captured)
-            .map_err(RuntimeError::Delivery)?;
+        let outcome = self.delivery.deliver(&text, captured);
 
         self.state
             .apply(AppEvent::DeliveryComplete)
@@ -380,7 +378,7 @@ impl AppRuntime {
             DeliveryOutcome::Injected | DeliveryOutcome::PastedViaClipboard => {
                 eprintln!("Transcript pasted.");
             }
-            DeliveryOutcome::CopiedToClipboard => {}
+            DeliveryOutcome::CopiedToClipboard | DeliveryOutcome::SavedOnly => {}
         }
         info!("Delivery finished ({outcome:?})");
         Ok(())

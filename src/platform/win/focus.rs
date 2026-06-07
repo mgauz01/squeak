@@ -53,15 +53,20 @@ pub fn restore_focus(target: FocusTarget) -> bool {
             return false;
         }
 
+        // SetForegroundWindow must target a top-level window; hwnd may be an edit child.
+        let top_level = GetAncestor(hwnd, GA_ROOT);
+        let fg_target = if top_level.0.is_null() { hwnd } else { top_level };
+
         let foreground = GetForegroundWindow();
-        if foreground == hwnd {
+        if foreground == fg_target || foreground == hwnd {
+            let _ = SetFocus(hwnd);
             return true;
         }
 
         let mut fg_pid = Default::default();
         let mut target_pid = Default::default();
         let fg_thread = GetWindowThreadProcessId(foreground, Some(&mut fg_pid));
-        let target_thread = GetWindowThreadProcessId(hwnd, Some(&mut target_pid));
+        let target_thread = GetWindowThreadProcessId(fg_target, Some(&mut target_pid));
         let current_thread = GetCurrentThreadId();
 
         let attached_fg = fg_thread != 0 && fg_thread != current_thread;
@@ -74,9 +79,9 @@ pub fn restore_focus(target: FocusTarget) -> bool {
             let _ = AttachThreadInput(current_thread, target_thread, true);
         }
 
-        let _ = ShowWindow(hwnd, SW_SHOW);
-        let _ = BringWindowToTop(hwnd);
-        let fg_ok = SetForegroundWindow(hwnd).0 != 0;
+        let _ = ShowWindow(fg_target, SW_SHOW);
+        let _ = BringWindowToTop(fg_target);
+        let fg_ok = SetForegroundWindow(fg_target).0 != 0;
         let _ = SetFocus(hwnd);
 
         if attached_fg {
