@@ -9,18 +9,18 @@ use tracing::info;
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{BOOL, COLORREF, HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, CreateRoundRectRgn, CreateSolidBrush, DeleteObject, EndPaint,
-    FillRect, GetMonitorInfoW, HRGN, InvalidateRect, MonitorFromPoint, RoundRect, SelectClipRgn,
-    SelectObject, SetWindowRgn, MONITORINFO, MONITOR_DEFAULTTOPRIMARY, PAINTSTRUCT,
+    BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateRoundRectRgn,
+    CreateSolidBrush, DeleteDC, DeleteObject, EndPaint, FillRect, GetMonitorInfoW, HRGN,
+    InvalidateRect, MonitorFromPoint, RoundRect, SelectClipRgn, SelectObject, SetWindowRgn,
+    MONITORINFO, MONITOR_DEFAULTTOPRIMARY, PAINTSTRUCT, SRCCOPY,
 };
 use windows::Win32::System::SystemInformation::GetTickCount64;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DispatchMessageW, GetSystemMetrics, GetWindowLongPtrW,
     PeekMessageW, RegisterClassW, SetTimer, SetWindowLongPtrW, SetWindowPos, ShowWindow,
-    TranslateMessage, CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA, HWND_TOPMOST, MSG, PM_REMOVE,
-    SM_CXSCREEN, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SW_HIDE, SW_SHOW,
-    WM_DESTROY, WM_ERASEBKGND, WM_PAINT, WM_TIMER, WNDCLASSW, WS_EX_NOACTIVATE,
-    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    TranslateMessage, GWLP_USERDATA, HWND_TOPMOST, MSG, PM_REMOVE, SM_CXSCREEN, SWP_NOACTIVATE,
+    SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SW_HIDE, SW_SHOW, WM_DESTROY, WM_ERASEBKGND,
+    WM_PAINT, WM_TIMER, WNDCLASSW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
 use crate::app::AppState;
@@ -86,7 +86,6 @@ unsafe fn run_overlay(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let class_name: Vec<u16> = "SqueakOverlay\0".encode_utf16().collect();
     let wc = WNDCLASSW {
-        style: CS_HREDRAW | CS_VREDRAW,
         lpfnWndProc: Some(overlay_wnd_proc),
         lpszClassName: PCWSTR(class_name.as_ptr()),
         ..Default::default()
@@ -163,7 +162,12 @@ unsafe fn apply_pill_window_shape(hwnd: HWND) {
 
 unsafe fn apply_overlay_mode(hwnd: HWND, mode: OverlayMode) {
     if let Some(state) = overlay_state_mut(hwnd) {
+        if state.mode == mode {
+            return;
+        }
         state.mode = mode;
+    } else {
+        return;
     }
     match mode {
         OverlayMode::Hidden => {
@@ -232,7 +236,28 @@ unsafe extern "system" fn overlay_wnd_proc(
             let mut ps = PAINTSTRUCT::default();
             let hdc = BeginPaint(hwnd, &mut ps);
             if !hdc.is_invalid() {
-                paint_overlay(hwnd, hdc);
+                let mem_dc = CreateCompatibleDC(hdc);
+                if !mem_dc.is_invalid() {
+                    let bitmap = CreateCompatibleBitmap(hdc, OVERLAY_WIDTH, OVERLAY_HEIGHT);
+                    if !bitmap.is_invalid() {
+                        let old_bitmap = SelectObject(mem_dc, bitmap);
+                        paint_overlay(hwnd, mem_dc);
+                        let _ = BitBlt(
+                            hdc,
+                            0,
+                            0,
+                            OVERLAY_WIDTH,
+                            OVERLAY_HEIGHT,
+                            mem_dc,
+                            0,
+                            0,
+                            SRCCOPY,
+                        );
+                        let _ = SelectObject(mem_dc, old_bitmap);
+                        let _ = DeleteObject(bitmap);
+                    }
+                    let _ = DeleteDC(mem_dc);
+                }
                 let _ = EndPaint(hwnd, &ps);
             }
             LRESULT(0)
@@ -347,20 +372,8 @@ unsafe fn paint_overlay(hwnd: HWND, hdc: windows::Win32::Graphics::Gdi::HDC) {
         let _ = DeleteObject(brush);
     }
 
-    // Top gloss + bottom ambient shade for depth.
-    let gloss_h = 2;
-    let gloss = CreateSolidBrush(colorref(110, 45, 125));
-    let _ = FillRect(
-        hdc,
-        &RECT {
-            left: inner.left,
-            top: inner.top,
-            right: inner.right,
-            bottom: inner.top + gloss_h,
-        },
-        gloss,
-    );
-    let _ = DeleteObject(gloss);
+    // Subtle top gloss (3D dome highlight) + bottom ambient shade.
+    paint_gloss(hdc, inner);
 
     let shade_h = 3;
     let shade = CreateSolidBrush(colorref(12, 0, 18));
@@ -413,6 +426,31 @@ fn lerp_rgb(a: (u8, u8, u8), b: (u8, u8, u8), t: f32) -> (u8, u8, u8) {
         (a.1 as f32 + (b.1 as f32 - a.1 as f32) * t) as u8,
         (a.2 as f32 + (b.2 as f32 - a.2 as f32) * t) as u8,
     )
+}
+
+/// Soft crown highlight — tapered width follows the pill curve.
+unsafe fn paint_gloss(hdc: windows::Win32::Graphics::Gdi::HDC, inner: windows::Win32::Foundation::RECT) {
+    use windows::Win32::Foundation::RECT;
+
+    const GLOSS_ROWS: i32 = 4;
+    let row_h = 1.max((inner.bottom - inner.top) / 12);
+    let inner_w = inner.right - inner.left;
+
+    for row in 0..GLOSS_ROWS {
+        let t = row as f32 / (GLOSS_ROWS - 1) as f32;
+        let (r, g, b) = lerp_rgb((168, 98, 178), (105, 42, 118), t);
+        // Narrower at the top row to suggest a curved reflective surface.
+        let side_inset = (4 + row * 5).min(inner_w / 3);
+        let brush = CreateSolidBrush(colorref(r, g, b));
+        let band = RECT {
+            left: inner.left + side_inset,
+            top: inner.top + row * row_h,
+            right: inner.right - side_inset,
+            bottom: inner.top + (row + 1) * row_h,
+        };
+        let _ = FillRect(hdc, &band, brush);
+        let _ = DeleteObject(brush);
+    }
 }
 
 unsafe fn paint_volume_bars(
