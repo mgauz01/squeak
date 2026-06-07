@@ -10,7 +10,7 @@ use crate::app::single_instance::SingleInstance;
 use crate::app::state::{AppState, StateMachine, TransitionError};
 use crate::asr::{AsrError, AsrWorker};
 use crate::audio::{
-    log_audio_stats, maybe_write_debug_wav, peak_normalize, AudioCapture, AudioError,
+    log_audio_stats, maybe_write_debug_wav, peak_normalize, AudioCapture, AudioError, AudioLevelMeter,
 };
 use crate::config::{AsrModelId, Config, GrammarModelId};
 use crate::hotkeys;
@@ -30,6 +30,7 @@ pub struct AppRuntime {
     delivery: DeliveryChain,
     running: Arc<AtomicBool>,
     overlay_tx: crossbeam_channel::Sender<overlay::OverlayMode>,
+    audio_meter: Arc<AudioLevelMeter>,
     injection_target: Option<FocusTarget>,
     _single_instance: SingleInstance,
 }
@@ -44,6 +45,7 @@ impl AppRuntime {
 
         let (event_tx, events) = crossbeam_channel::unbounded();
         let (overlay_tx, overlay_rx) = crossbeam_channel::unbounded();
+        let audio_meter = AudioLevelMeter::new();
         let running = Arc::new(AtomicBool::new(true));
 
         eprintln!("Squeak initializing (tray + hotkeys + overlay)...");
@@ -55,7 +57,7 @@ impl AppRuntime {
             config.grammar_enabled(),
             config.grammar_model(),
         )?;
-        overlay::spawn(overlay_rx, Arc::clone(&running))?;
+        overlay::spawn(overlay_rx, Arc::clone(&running), Arc::clone(&audio_meter))?;
 
         Ok(Self {
             state: StateMachine::new(),
@@ -67,6 +69,7 @@ impl AppRuntime {
             delivery,
             running,
             overlay_tx,
+            audio_meter,
             injection_target: None,
             _single_instance: single_instance,
         })
@@ -237,7 +240,10 @@ impl AppRuntime {
     fn start_recording(&mut self) -> Result<(), RuntimeError> {
         self.injection_target = FocusTarget::capture();
         if self.audio.is_none() {
-            self.audio = Some(AudioCapture::try_new().map_err(RuntimeError::Audio)?);
+            self.audio = Some(
+                AudioCapture::try_new_with_meter(Some(Arc::clone(&self.audio_meter)))
+                    .map_err(RuntimeError::Audio)?,
+            );
         }
         self.audio
             .as_mut()

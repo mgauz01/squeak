@@ -5,6 +5,8 @@ use rubato::{FftFixedIn, Resampler};
 use thiserror::Error;
 use tracing::warn;
 
+use crate::audio::level_meter::AudioLevelMeter;
+
 pub const TARGET_SAMPLE_RATE: u32 = 16_000;
 
 #[derive(Debug, Error)]
@@ -30,10 +32,15 @@ pub struct AudioCapture {
     input_sample_rate: u32,
     channels: u16,
     stream: Option<cpal::Stream>,
+    level_meter: Option<Arc<AudioLevelMeter>>,
 }
 
 impl AudioCapture {
     pub fn try_new() -> Result<Self, AudioError> {
+        Self::try_new_with_meter(None)
+    }
+
+    pub fn try_new_with_meter(level_meter: Option<Arc<AudioLevelMeter>>) -> Result<Self, AudioError> {
         let host = cpal::default_host();
         let device = host
             .default_input_device()
@@ -48,11 +55,15 @@ impl AudioCapture {
             input_sample_rate: config.sample_rate().0,
             channels: config.channels(),
             stream: None,
+            level_meter,
         })
     }
 
     pub fn start(&mut self) -> Result<(), AudioError> {
         self.buffer.lock().unwrap().clear();
+        if let Some(meter) = &self.level_meter {
+            meter.reset();
+        }
 
         let host = cpal::default_host();
         let device = host
@@ -66,6 +77,7 @@ impl AudioCapture {
         self.input_sample_rate = config.sample_rate().0;
         self.channels = config.channels();
         let buffer = Arc::clone(&self.buffer);
+        let level_meter = self.level_meter.clone();
         let sample_format = config.sample_format();
         let stream_config: cpal::StreamConfig = config.clone().into();
 
@@ -73,7 +85,12 @@ impl AudioCapture {
             cpal::SampleFormat::F32 => device
                 .build_input_stream(
                     &stream_config,
-                    move |data: &[f32], _| append_samples(&buffer, data),
+                    move |data: &[f32], _| {
+                        append_samples(&buffer, data);
+                        if let Some(meter) = &level_meter {
+                            meter.update_from_chunk(data);
+                        }
+                    },
                     move |err| warn!("audio stream error: {err}"),
                     None,
                 )
@@ -85,6 +102,9 @@ impl AudioCapture {
                         let converted: Vec<f32> =
                             data.iter().map(|&s| s as f32 / i16::MAX as f32).collect();
                         append_samples(&buffer, &converted);
+                        if let Some(meter) = &level_meter {
+                            meter.update_from_chunk(&converted);
+                        }
                     },
                     move |err| warn!("audio stream error: {err}"),
                     None,
