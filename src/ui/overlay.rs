@@ -138,7 +138,7 @@ unsafe fn apply_overlay_mode(hwnd: HWND, mode: OverlayMode) {
                 0,
                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
             );
-            let _ = InvalidateRect(Some(hwnd), None, false);
+            let _ = InvalidateRect(hwnd, None, false);
         }
     }
 }
@@ -191,7 +191,7 @@ unsafe extern "system" fn overlay_wnd_proc(
         }
         WM_TIMER if wparam.0 == ANIM_TIMER_ID => {
             if overlay_mode(hwnd) != OverlayMode::Hidden {
-                let _ = InvalidateRect(Some(hwnd), None, false);
+                let _ = InvalidateRect(hwnd, None, false);
             }
             LRESULT(0)
         }
