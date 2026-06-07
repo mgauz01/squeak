@@ -9,6 +9,7 @@ fn main() {
     {
         if let Err(err) = run_windows() {
             tracing::error!("{err}");
+            eprintln!("Squeak exited with error: {err}");
             std::process::exit(1);
         }
     }
@@ -28,6 +29,16 @@ fn main() {
 
 #[cfg(windows)]
 fn run_windows() -> Result<(), Box<dyn std::error::Error>> {
-    let runtime = squeak::app::AppRuntime::start()?;
+    let runtime = match squeak::app::AppRuntime::start() {
+        Ok(runtime) => runtime,
+        Err(err) => {
+            if err.to_string().contains("already running") {
+                eprintln!("Squeak is already running. Look for the orange tray icon (^ overflow in the taskbar).");
+            } else {
+                eprintln!("Squeak failed to start: {err}");
+            }
+            return Err(err);
+        }
+    };
     runtime.run()
 }

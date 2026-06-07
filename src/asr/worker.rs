@@ -55,6 +55,30 @@ impl AsrWorker {
         self.downloading.load(Ordering::Relaxed)
     }
 
+    pub fn preload_in_background(&self, tier: ModelTier) {
+        let (reply_tx, reply_rx) = crossbeam_channel::bounded(1);
+        if self
+            .tx
+            .send(WorkerCommand::EnsureReady {
+                tier,
+                reply: reply_tx,
+            })
+            .is_err()
+        {
+            return;
+        }
+        thread::Builder::new()
+            .name("squeak-asr-preload".into())
+            .spawn(move || {
+                match reply_rx.recv() {
+                    Ok(Ok(())) => eprintln!("Speech model ready."),
+                    Ok(Err(err)) => eprintln!("Speech model load failed: {err}"),
+                    Err(_) => eprintln!("Speech model load interrupted."),
+                }
+            })
+            .ok();
+    }
+
     pub fn ensure_ready(&self, tier: ModelTier) -> Result<(), AsrError> {
         let (reply_tx, reply_rx) = crossbeam_channel::bounded(1);
         self.tx

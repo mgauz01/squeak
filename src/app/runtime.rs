@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crossbeam_channel::Receiver;
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 
 use crate::app::{AppEvent, UserAction};
 use crate::app::single_instance::SingleInstance;
@@ -22,7 +22,7 @@ pub struct AppRuntime {
     config: Config,
     events: Receiver<AppEvent>,
     asr: AsrWorker,
-    audio: AudioCapture,
+    audio: Option<AudioCapture>,
     delivery: DeliveryChain,
     running: Arc<AtomicBool>,
     _single_instance: SingleInstance,
@@ -33,12 +33,12 @@ impl AppRuntime {
         let single_instance = SingleInstance::acquire()?;
         let config = Config::load();
         let asr = AsrWorker::spawn(config.directml);
-        let audio = AudioCapture::try_new()?;
         let delivery = DeliveryChain::new();
 
         let (event_tx, events) = crossbeam_channel::unbounded();
         let running = Arc::new(AtomicBool::new(true));
 
+        eprintln!("Squeak initializing (tray + hotkeys)...");
         hotkeys::spawn_hotkeys(event_tx.clone());
         tray::spawn(event_tx.clone(), Arc::clone(&running))?;
 
@@ -47,7 +47,7 @@ impl AppRuntime {
             config,
             events,
             asr,
-            audio,
+            audio: None,
             delivery,
             running,
             _single_instance: single_instance,
@@ -55,13 +55,10 @@ impl AppRuntime {
     }
 
     pub fn run(mut self) -> Result<(), Box<dyn std::error::Error>> {
-        info!("Loading ASR model ({:?})...", self.config.model_tier);
-        if let Err(err) = self.asr.ensure_ready(self.config.model_tier) {
-            error!("ASR model load failed: {err} — dictation will retry on first use");
-        } else {
-            info!("ASR model ready");
-        }
+        eprintln!("Loading speech model in background (first launch may take a minute)...");
+        self.asr.preload_in_background(self.config.model_tier);
 
+        eprintln!("Hold Win+Ctrl to dictate. Shift+Alt+Z pastes last transcript. Tray menu → Exit to quit.");
         info!("Squeak running — hold Win+Ctrl to dictate, Shift+Alt+Z to paste last");
 
         while self.running.load(Ordering::Relaxed) {
@@ -97,16 +94,20 @@ impl AppRuntime {
         match (prev, next) {
             (_, AppState::RecordingPtt | AppState::RecordingHandsFree) => {
                 if prev == AppState::RecordingPtt || prev == AppState::RecordingHandsFree {
-                    let _ = self.audio.stop();
+                    if let Some(audio) = self.audio.as_mut() {
+                        let _ = audio.stop();
+                    }
                 }
-                self.audio.start().map_err(RuntimeError::Audio)?;
+                self.start_recording()?;
                 info!("Recording ({next:?})");
             }
             (AppState::RecordingPtt | AppState::RecordingHandsFree, AppState::Processing) => {
                 self.process_recording()?;
             }
             (AppState::RecordingPtt | AppState::RecordingHandsFree, AppState::Idle) => {
-                let _ = self.audio.stop();
+                if let Some(audio) = self.audio.as_mut() {
+                    let _ = audio.stop();
+                }
                 info!("Recording cancelled");
             }
             _ => {}
@@ -130,8 +131,24 @@ impl AppRuntime {
         Ok(())
     }
 
+    fn start_recording(&mut self) -> Result<(), RuntimeError> {
+        if self.audio.is_none() {
+            self.audio = Some(AudioCapture::try_new().map_err(RuntimeError::Audio)?);
+        }
+        self.audio
+            .as_mut()
+            .expect("audio just initialized")
+            .start()
+            .map_err(RuntimeError::Audio)
+    }
+
     fn process_recording(&mut self) -> Result<(), RuntimeError> {
-        let samples = self.audio.stop().map_err(RuntimeError::Audio)?;
+        let samples = self
+            .audio
+            .as_mut()
+            .ok_or(RuntimeError::Message("microphone not available".into()))?
+            .stop()
+            .map_err(RuntimeError::Audio)?;
         info!("Processing {} samples", samples.len());
 
         if samples.is_empty() {
@@ -141,6 +158,10 @@ impl AppRuntime {
         if self.asr.is_downloading() {
             return self.fail_processing("model is still downloading");
         }
+
+        self.asr
+            .ensure_ready(self.config.model_tier)
+            .map_err(|e| RuntimeError::Message(e.to_string()))?;
 
         let raw = self.asr.transcribe(samples).map_err(|e| match e {
             AsrError::EmptyAudio => RuntimeError::Message("empty audio".into()),
