@@ -44,7 +44,7 @@ impl AudioLevelMeter {
                 .iter()
                 .map(|s| s.abs())
                 .fold(0.0_f32, f32::max);
-            let scaled = (peak * 2).clamp(0.0, 1.0);
+            let scaled = (peak * 2.0).clamp(0.0, 1.0);
             let prev = load_f32(bar);
             let next = smooth_level(prev, scaled);
             store_f32(bar, next);
