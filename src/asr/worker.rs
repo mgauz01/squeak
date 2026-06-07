@@ -6,13 +6,14 @@ use crossbeam_channel::{Receiver, Sender};
 use tracing::info;
 
 use crate::asr::engine::{AsrEngine, AsrError};
-use crate::asr::model_download::{ensure_model, DownloadProgress};
-use crate::asr::moonshine::{configure_ort_accelerator, MoonshineEngine};
-use crate::config::ModelTier;
+use crate::asr::factory::create_engine;
+use crate::asr::provision::{ensure_model, DownloadProgress};
+use crate::asr::moonshine::configure_ort_accelerator;
+use crate::config::AsrModelId;
 
 enum WorkerCommand {
     EnsureReady {
-        tier: ModelTier,
+        model: AsrModelId,
         reply: Sender<Result<(), AsrError>>,
     },
     Transcribe {
@@ -20,12 +21,12 @@ enum WorkerCommand {
         reply: Sender<Result<String, AsrError>>,
     },
     Reload {
-        tier: ModelTier,
+        model: AsrModelId,
     },
     Shutdown,
 }
 
-/// Handle to the background ASR worker (owns `StreamingModel` on a dedicated thread).
+/// Handle to the background ASR worker (owns loaded engine on a dedicated thread).
 pub struct AsrWorker {
     tx: Sender<WorkerCommand>,
     downloading: Arc<AtomicBool>,
@@ -55,12 +56,12 @@ impl AsrWorker {
         self.downloading.load(Ordering::Relaxed)
     }
 
-    pub fn preload_in_background(&self, tier: ModelTier) {
+    pub fn preload_in_background(&self, model: AsrModelId) {
         let (reply_tx, reply_rx) = crossbeam_channel::bounded(1);
         if self
             .tx
             .send(WorkerCommand::EnsureReady {
-                tier,
+                model,
                 reply: reply_tx,
             })
             .is_err()
@@ -79,11 +80,11 @@ impl AsrWorker {
             .ok();
     }
 
-    pub fn ensure_ready(&self, tier: ModelTier) -> Result<(), AsrError> {
+    pub fn ensure_ready(&self, model: AsrModelId) -> Result<(), AsrError> {
         let (reply_tx, reply_rx) = crossbeam_channel::bounded(1);
         self.tx
             .send(WorkerCommand::EnsureReady {
-                tier,
+                model,
                 reply: reply_tx,
             })
             .map_err(|_| AsrError::WorkerClosed)?;
@@ -101,9 +102,9 @@ impl AsrWorker {
         reply_rx.recv().map_err(|_| AsrError::WorkerClosed)?
     }
 
-    pub fn reload(&self, tier: ModelTier) -> Result<(), AsrError> {
+    pub fn reload(&self, model: AsrModelId) -> Result<(), AsrError> {
         self.tx
-            .send(WorkerCommand::Reload { tier })
+            .send(WorkerCommand::Reload { model })
             .map_err(|_| AsrError::WorkerClosed)
     }
 }
@@ -115,30 +116,33 @@ impl Drop for AsrWorker {
 }
 
 struct WorkerState {
-    tier: Option<ModelTier>,
-    engine: Option<MoonshineEngine>,
+    loaded: Option<AsrModelId>,
+    engine: Option<Box<dyn AsrEngine>>,
 }
 
 fn worker_main(rx: Receiver<WorkerCommand>, downloading: Arc<AtomicBool>) {
     let mut state = WorkerState {
-        tier: None,
+        loaded: None,
         engine: None,
     };
 
     for cmd in rx {
         match cmd {
-            WorkerCommand::EnsureReady { tier, reply } => {
-                let result = ensure_ready(&mut state, tier, &downloading);
+            WorkerCommand::EnsureReady { model, reply } => {
+                let result = ensure_ready(&mut state, model, &downloading);
                 let _ = reply.send(result);
             }
             WorkerCommand::Transcribe { samples, reply } => {
                 let result = transcribe_loaded(&mut state, &samples, &downloading);
                 let _ = reply.send(result);
             }
-            WorkerCommand::Reload { tier } => {
+            WorkerCommand::Reload { model } => {
                 state.engine = None;
-                state.tier = Some(tier);
-                info!("ASR model scheduled for reload on next ensure_ready");
+                state.loaded = Some(model);
+                info!(
+                    "ASR model scheduled for reload on next ensure_ready ({})",
+                    model.config_key()
+                );
             }
             WorkerCommand::Shutdown => break,
         }
@@ -149,16 +153,18 @@ fn worker_main(rx: Receiver<WorkerCommand>, downloading: Arc<AtomicBool>) {
 
 fn ensure_ready(
     state: &mut WorkerState,
-    tier: ModelTier,
+    model: AsrModelId,
     downloading: &AtomicBool,
 ) -> Result<(), AsrError> {
-    if state.engine.as_ref().is_some_and(|e| e.tier() == tier) {
+    if state.loaded == Some(model) && state.engine.is_some() {
         return Ok(());
     }
 
     downloading.store(true, Ordering::Relaxed);
-    let download_result = ensure_model(tier, |progress| match &progress {
-        DownloadProgress::Starting { tier } => info!("Downloading model tier: {:?}", tier),
+    let download_result = ensure_model(model, |progress| match &progress {
+        DownloadProgress::Starting { model } => {
+            info!("Downloading speech model: {}", model.config_key())
+        }
         DownloadProgress::Downloading {
             downloaded,
             total,
@@ -168,11 +174,11 @@ fn ensure_ready(
     });
     downloading.store(false, Ordering::Relaxed);
 
-    let _dir = download_result?;
+    let dir = download_result?;
 
-    state.engine = Some(MoonshineEngine::load(tier)?);
-    state.tier = Some(tier);
-    info!("Moonshine model warm-loaded for tier {:?}", tier);
+    state.engine = Some(create_engine(model, &dir)?);
+    state.loaded = Some(model);
+    info!("Speech model warm-loaded: {}", model.config_key());
     Ok(())
 }
 
@@ -195,7 +201,7 @@ mod tests {
     use crate::asr::engine::MockAsrEngine;
 
     #[test]
-    fn mock_engine_still_works_in_u4_tests() {
+    fn mock_engine_still_works_in_worker_tests() {
         let mut mock = MockAsrEngine::new("ok");
         assert_eq!(mock.transcribe(&[0.5]).unwrap(), "ok");
     }

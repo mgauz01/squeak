@@ -26,6 +26,9 @@ required-features = []
 
 [features]
 default = []
+parakeet = []
+cohere = []
+canary = []
 directml = ["transcribe-rs/ort-directml"]
 
 [dependencies]

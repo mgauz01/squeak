@@ -46,8 +46,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let config = squeak::config::Config::load();
     let worker = squeak::asr::AsrWorker::spawn(config.directml);
 
-    println!("Ensuring model ({:?})...", config.model_tier);
-    worker.ensure_ready(config.model_tier)?;
+    println!("Ensuring model ({})...", config.asr_model().config_key());
+    worker.ensure_ready(config.asr_model())?;
 
     println!("Transcribing {}...", wav.display());
     let samples = load_wav_mono_16k(wav)?;

@@ -8,19 +8,19 @@ use tracing::info;
 use tray_icon::{Icon, TrayIconBuilder};
 
 use crate::app::{AppEvent, UserAction};
-use crate::config::ModelTier;
+use crate::config::AsrModelId;
 
 use windows::Win32::UI::WindowsAndMessaging::MSG;
 
 pub fn spawn(
     event_tx: Sender<AppEvent>,
     running: Arc<AtomicBool>,
-    initial_tier: ModelTier,
+    initial_model: AsrModelId,
 ) -> Result<(), Box<dyn std::error::Error>> {
     thread::Builder::new()
         .name("squeak-tray".into())
         .spawn(move || {
-            if let Err(err) = run_tray(event_tx, running, initial_tier) {
+            if let Err(err) = run_tray(event_tx, running, initial_model) {
                 tracing::error!("tray thread failed: {err}");
                 eprintln!("Squeak tray failed: {err}");
             }
@@ -62,7 +62,7 @@ fn build_tray_icon() -> Result<Icon, Box<dyn std::error::Error>> {
 fn run_tray(
     event_tx: Sender<AppEvent>,
     running: Arc<AtomicBool>,
-    initial_tier: ModelTier,
+    initial_model: AsrModelId,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let icon = build_tray_icon()?;
 
@@ -70,13 +70,20 @@ fn run_tray(
     let exit_id = exit_item.id().clone();
 
     let model_menu = Submenu::new(
-        format!("Speech model ({initial_tier:?})"),
+        format!("Speech model ({})", initial_model.tray_summary()),
         true,
     );
-    let mut tier_ids = Vec::new();
-    for tier in ModelTier::ALL {
-        let item = MenuItem::new(tier.menu_label(), true, None);
-        tier_ids.push((item.id().clone(), tier));
+    let mut model_ids = Vec::new();
+    for model in AsrModelId::MOONSHINE_ALL {
+        let item = MenuItem::new(model.menu_label(), true, None);
+        model_ids.push((item.id().clone(), model));
+        model_menu.append(&item)?;
+    }
+    #[cfg(feature = "parakeet")]
+    {
+        let model = AsrModelId::Parakeet;
+        let item = MenuItem::new(model.menu_label(), true, None);
+        model_ids.push((item.id().clone(), model));
         model_menu.append(&item)?;
     }
 
@@ -105,12 +112,12 @@ fn run_tray(
                 let _ = event_tx_menu.send(AppEvent::UserAction(UserAction::Exit));
                 return;
             }
-            for (id, tier) in &tier_ids {
+            for (id, model) in &model_ids {
                 if *id == event.id() {
-                    let _ = event_tx_menu.send(AppEvent::UserAction(UserAction::SetModelTier(
-                        format!("{tier:?}").to_lowercase(),
+                    let _ = event_tx_menu.send(AppEvent::UserAction(UserAction::SetAsrModel(
+                        model.config_key(),
                     )));
-                    eprintln!("Switching speech model to {tier:?}…");
+                    eprintln!("Switching speech model to {}…", model.tray_summary());
                     return;
                 }
             }
@@ -121,7 +128,8 @@ fn run_tray(
             "Squeak is in the system tray (orange ring). Dictation shows a pill at the top of the screen."
         );
         eprintln!(
-            "Speech model: {initial_tier:?} (default Small). Use tray → Speech model for Tiny/Medium."
+            "Speech model: {} (default Small). Use tray → Speech model to change.",
+            initial_model.tray_summary()
         );
 
         while running.load(Ordering::Relaxed) {

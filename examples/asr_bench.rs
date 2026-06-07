@@ -1,8 +1,9 @@
-//! Compare Moonshine tiers on the same WAV (Windows):
+//! Compare speech models on the same WAV (Windows):
 //!
 //! ```powershell
 //! cargo run --example asr_bench --release -- C:\path\to\16khz-mono.wav
-//! cargo run --example asr_bench --release -- C:\path\to\clip.wav --tiers tiny,small
+//! cargo run --example asr_bench --release -- clip.wav --models moonshine:tiny,moonshine:small
+//! cargo run --example asr_bench --features parakeet --release -- clip.wav --models parakeet
 //! ```
 
 #[cfg(not(windows))]
@@ -26,7 +27,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     use std::time::Instant;
 
     use squeak::asr::AsrWorker;
-    use squeak::config::ModelTier;
+    use squeak::config::AsrModelId;
 
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
@@ -36,11 +37,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let wav_path = args
         .next()
         .ok_or(
-            "usage: asr_bench <16khz-mono.wav> [--tiers tiny,small,medium]\n\
-             example: cargo run --example asr_bench --release -- clip.wav --tiers tiny,small",
+            "usage: asr_bench <16khz-mono.wav> [--models moonshine:small,parakeet]\n\
+             legacy:   asr_bench clip.wav --tiers tiny,small,medium",
         )?;
 
-    let tiers = parse_tiers(args.next().as_deref())?;
+    let models = parse_models(args.next().as_deref())?;
     let wav = Path::new(&wav_path);
     if !wav.is_file() {
         return Err(format!("WAV file not found: {wav_path}").into());
@@ -58,9 +59,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let config = squeak::config::Config::load();
     let worker = AsrWorker::spawn(config.directml);
 
-    for tier in tiers {
-        println!("Tier: {tier:?}");
-        worker.ensure_ready(tier)?;
+    for model in models {
+        println!("Model: {}", model.config_key());
+        worker.ensure_ready(model)?;
         let start = Instant::now();
         let text = worker.transcribe(samples.clone())?;
         let elapsed = start.elapsed();
@@ -73,29 +74,28 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[cfg(windows)]
-fn parse_tiers(arg: Option<&str>) -> Result<Vec<squeak::config::ModelTier>, Box<dyn std::error::Error>> {
-    use squeak::config::ModelTier;
-
+fn parse_models(arg: Option<&str>) -> Result<Vec<AsrModelId>, Box<dyn std::error::Error>> {
     let Some(raw) = arg else {
-        return Ok(ModelTier::ALL.to_vec());
+        return Ok(AsrModelId::MOONSHINE_ALL.to_vec());
     };
 
-    let Some(list) = raw.strip_prefix("--tiers") else {
-        return Err(format!("unexpected argument: {raw} (expected --tiers tiny,small,medium)").into());
-    };
-
+    let list = raw
+        .strip_prefix("--models")
+        .or_else(|| raw.strip_prefix("--tiers"))
+        .ok_or_else(|| format!("unexpected argument: {raw}"))?;
     let list = list.trim_start_matches('=').trim();
     if list.is_empty() {
-        return Err("missing tier list after --tiers".into());
+        return Err("missing model list after --models".into());
     }
 
-    let mut tiers = Vec::new();
+    let mut models = Vec::new();
     for part in list.split(',') {
-        let tier = ModelTier::parse(part.trim())
-            .ok_or_else(|| format!("unknown tier: {}", part.trim()))?;
-        tiers.push(tier);
+        let part = part.trim();
+        let model = AsrModelId::parse(part)
+            .ok_or_else(|| format!("unknown model: {part} (try moonshine:small or tiny)"))?;
+        models.push(model);
     }
-    Ok(tiers)
+    Ok(models)
 }
 
 #[cfg(windows)]

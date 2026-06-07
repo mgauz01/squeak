@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use super::model::ModelTier;
+use super::model::{AsrModelId, ModelTier};
 
 pub fn config_dir() -> PathBuf {
     dirs::config_dir()
@@ -19,6 +19,11 @@ pub fn models_dir() -> PathBuf {
         .join("models")
 }
 
+pub fn model_dir_for(model: AsrModelId) -> PathBuf {
+    models_dir().join(model.directory_name())
+}
+
+/// Legacy helper — Moonshine tier directories at `models/<tier-dir>/`.
 pub fn model_dir(tier: ModelTier) -> PathBuf {
-    models_dir().join(tier.directory_name())
+    model_dir_for(AsrModelId::moonshine(tier))
 }

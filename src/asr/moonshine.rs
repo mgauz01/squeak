@@ -12,8 +12,8 @@ use transcribe_rs::onnx::Quantization;
 use transcribe_rs::{SpeechModel, TranscribeOptions};
 
 use crate::asr::engine::{AsrEngine, AsrError};
-use crate::asr::model_download::{model_dir, model_is_complete};
-use crate::config::ModelTier;
+use crate::asr::provision::{model_dir, model_is_complete};
+use crate::config::{AsrModelId, ModelTier};
 
 const DEFAULT_THREADS: usize = 4;
 /// Moonshine streaming frontend processes fixed 1280-sample chunks (transcribe-rs).
@@ -22,12 +22,21 @@ const STREAMING_CHUNK_SAMPLES: usize = 1280;
 pub struct MoonshineEngine {
     inner: StreamingModel,
     tier: ModelTier,
+    model: AsrModelId,
 }
 
 impl MoonshineEngine {
-    pub fn load(tier: ModelTier) -> Result<Self, AsrError> {
-        let dir = model_dir(tier);
-        if !model_is_complete(&dir) {
+    pub fn load(model: AsrModelId) -> Result<Self, AsrError> {
+        let tier = model.moonshine_tier().ok_or_else(|| {
+            AsrError::Other(format!("not a Moonshine model: {}", model.config_key()))
+        })?;
+        let dir = model_dir(model);
+        Self::load_from_dir(&dir, tier)
+    }
+
+    pub fn load_from_dir(dir: &Path, tier: ModelTier) -> Result<Self, AsrError> {
+        let model = AsrModelId::moonshine(tier);
+        if !model_is_complete(model, dir) {
             return Err(AsrError::Other(format!(
                 "model files missing in {}",
                 dir.display()
@@ -36,32 +45,32 @@ impl MoonshineEngine {
 
         info!("Loading Moonshine streaming model from {}", dir.display());
         let threads = recommended_thread_count();
-        let inner = StreamingModel::load(&dir, threads, &Quantization::default())
+        let inner = StreamingModel::load(dir, threads, &Quantization::default())
             .map_err(|e| AsrError::Transcription(e.to_string()))?;
 
-        Ok(Self { inner, tier })
+        Ok(Self {
+            inner,
+            tier,
+            model,
+        })
     }
 
     pub fn tier(&self) -> ModelTier {
         self.tier
     }
 
-    pub fn load_from_dir(dir: &Path, tier: ModelTier) -> Result<Self, AsrError> {
-        if !model_is_complete(dir) {
-            return Err(AsrError::Other(format!(
-                "model files missing in {}",
-                dir.display()
-            )));
-        }
-        let inner = StreamingModel::load(dir, recommended_thread_count(), &Quantization::default())
-            .map_err(|e| AsrError::Transcription(e.to_string()))?;
-        Ok(Self { inner, tier })
+    pub fn model_id(&self) -> AsrModelId {
+        self.model
     }
 }
 
 impl AsrEngine for MoonshineEngine {
     fn is_loaded(&self) -> bool {
         true
+    }
+
+    fn model_id(&self) -> Option<AsrModelId> {
+        Some(self.model)
     }
 
     fn transcribe(&mut self, samples: &[f32]) -> Result<String, AsrError> {

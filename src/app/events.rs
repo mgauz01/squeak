@@ -16,6 +16,8 @@ pub enum UserAction {
     Exit,
     OpenSettings,
     PasteLast,
+    SetAsrModel(String),
+    /// Moonshine tier shortcut (`tiny` / `small` / `medium`).
     SetModelTier(String),
     ToggleAutostart(bool),
     ToggleDirectMl(bool),

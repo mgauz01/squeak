@@ -27,9 +27,13 @@ pub enum AsrError {
     Other(String),
 }
 
-/// Local speech-to-text engine boundary (v1: Moonshine only).
+/// Local speech-to-text engine boundary.
 pub trait AsrEngine: Send {
     fn is_loaded(&self) -> bool;
+
+    fn model_id(&self) -> Option<crate::config::AsrModelId> {
+        None
+    }
 
     fn transcribe(&mut self, samples: &[f32]) -> Result<String, AsrError>;
 }
@@ -111,5 +115,11 @@ mod tests {
     fn mock_not_loaded_errors() {
         let mut engine = MockAsrEngine::unloaded();
         assert!(matches!(engine.transcribe(&[1.0]), Err(AsrError::NotLoaded)));
+    }
+
+    #[test]
+    fn mock_engine_trait_object() {
+        let mut engine: Box<dyn AsrEngine> = Box::new(MockAsrEngine::new("hi"));
+        assert_eq!(engine.transcribe(&[0.1]).unwrap(), "hi");
     }
 }

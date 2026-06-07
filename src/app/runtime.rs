@@ -12,7 +12,7 @@ use crate::asr::{AsrError, AsrWorker};
 use crate::audio::{
     log_audio_stats, maybe_write_debug_wav, peak_normalize, AudioCapture, AudioError,
 };
-use crate::config::{Config, ModelTier};
+use crate::config::{AsrModelId, Config};
 use crate::hotkeys;
 use crate::output::{DeliveryChain, DeliveryError};
 use crate::platform::win::focus::FocusTarget;
@@ -46,7 +46,7 @@ impl AppRuntime {
 
         eprintln!("Squeak initializing (tray + hotkeys + overlay)...");
         hotkeys::spawn_hotkeys(event_tx.clone());
-        tray::spawn(event_tx.clone(), Arc::clone(&running), config.model_tier)?;
+        tray::spawn(event_tx.clone(), Arc::clone(&running), config.asr_model())?;
         overlay::spawn(overlay_rx, Arc::clone(&running))?;
 
         Ok(Self {
@@ -65,10 +65,13 @@ impl AppRuntime {
 
     pub fn run(mut self) -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("Loading speech model in background (first launch may take a minute)...");
-        self.asr.preload_in_background(self.config.model_tier);
+        self.asr.preload_in_background(self.config.asr_model());
 
         eprintln!("Hold Win+Ctrl to dictate. Shift+Alt+Z pastes last transcript. Orange circle in the taskbar = Squeak running.");
-        eprintln!("Using {:?} speech model — tray → Speech model to change tier (Small recommended).", self.config.model_tier);
+        eprintln!(
+            "Using {} — tray → Speech model to change (Small recommended).",
+            self.config.asr_model().tray_summary()
+        );
         info!("Squeak running — hold Win+Ctrl to dictate, Shift+Alt+Z to paste last");
 
         while self.running.load(Ordering::Relaxed) {
@@ -99,8 +102,12 @@ impl AppRuntime {
             return self.handle_paste_last();
         }
 
+        if let AppEvent::UserAction(UserAction::SetAsrModel(key)) = &event {
+            return self.handle_set_asr_model(key);
+        }
+
         if let AppEvent::UserAction(UserAction::SetModelTier(tier_name)) = &event {
-            return self.handle_set_model_tier(tier_name);
+            return self.handle_set_asr_model(tier_name);
         }
 
         let prev = self.state.state();
@@ -133,26 +140,27 @@ impl AppRuntime {
         Ok(())
     }
 
-    fn handle_set_model_tier(&mut self, tier_name: &str) -> Result<(), RuntimeError> {
-        let tier = ModelTier::parse(tier_name).ok_or_else(|| {
-            RuntimeError::Message(format!("unknown model tier: {tier_name}"))
+    fn handle_set_asr_model(&mut self, key: &str) -> Result<(), RuntimeError> {
+        let model = AsrModelId::parse(key).ok_or_else(|| {
+            RuntimeError::Message(format!("unknown speech model: {key}"))
         })?;
 
-        if self.config.model_tier == tier {
-            info!("Model tier already {tier:?}");
+        if self.config.asr_model() == model {
+            info!("Speech model already {}", model.config_key());
             return Ok(());
         }
 
-        self.config.model_tier = tier;
+        self.config.set_asr_model(model);
         self.config.save().map_err(|e| RuntimeError::Message(e.to_string()))?;
         self.asr
-            .reload(tier)
+            .reload(model)
             .map_err(|e| RuntimeError::Message(e.to_string()))?;
-        self.asr.preload_in_background(tier);
+        self.asr.preload_in_background(model);
         eprintln!(
-            "Speech model set to {tier:?}. Download/load may take a minute on first use."
+            "Speech model set to {}. Download/load may take a minute on first use.",
+            model.tray_summary()
         );
-        info!("Model tier changed to {tier:?}");
+        info!("Speech model changed to {}", model.config_key());
         Ok(())
     }
 
@@ -204,7 +212,7 @@ impl AppRuntime {
         }
 
         self.asr
-            .ensure_ready(self.config.model_tier)
+            .ensure_ready(self.config.asr_model())
             .map_err(|e| RuntimeError::Message(e.to_string()))?;
 
         let raw = self.asr.transcribe(samples).map_err(|e| match e {
