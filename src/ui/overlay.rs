@@ -9,9 +9,9 @@ use tracing::info;
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{BOOL, COLORREF, HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, CreatePen, CreateRoundRectRgn, CreateSolidBrush, DeleteObject, EndPaint,
+    BeginPaint, CreateRoundRectRgn, CreateSolidBrush, DeleteObject, EndPaint,
     FillRect, GetMonitorInfoW, HRGN, InvalidateRect, MonitorFromPoint, RoundRect, SelectClipRgn,
-    SelectObject, SetWindowRgn, MONITORINFO, MONITOR_DEFAULTTOPRIMARY, PAINTSTRUCT, PS_SOLID,
+    SelectObject, SetWindowRgn, MONITORINFO, MONITOR_DEFAULTTOPRIMARY, PAINTSTRUCT,
 };
 use windows::Win32::System::SystemInformation::GetTickCount64;
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -71,6 +71,11 @@ pub fn sync(tx: &Sender<OverlayMode>, state: AppState) {
         AppState::Processing | AppState::Injecting => OverlayMode::Processing,
         _ => OverlayMode::Hidden,
     };
+    set_mode(tx, mode);
+}
+
+/// Push an overlay mode directly (e.g. show pill as soon as Win+Ctrl is pressed).
+pub fn set_mode(tx: &Sender<OverlayMode>, mode: OverlayMode) {
     let _ = tx.send(mode);
 }
 
@@ -272,7 +277,6 @@ fn inner_pill_radius() -> i32 {
 
 unsafe fn paint_overlay(hwnd: HWND, hdc: windows::Win32::Graphics::Gdi::HDC) {
     use windows::Win32::Foundation::RECT;
-    use windows::Win32::Graphics::Gdi::{GetStockObject, NULL_BRUSH};
 
     let Some(state) = overlay_state_mut(hwnd) else {
         return;
@@ -286,11 +290,7 @@ unsafe fn paint_overlay(hwnd: HWND, hdc: windows::Win32::Graphics::Gdi::HDC) {
     let inner = inner_pill_rect();
     let inner_r = inner_pill_radius();
 
-    // Opaque pill shell (no black corners — window region is already pill-shaped).
-    let shell = CreateSolidBrush(colorref(10, 0, 16));
-    let old = SelectObject(hdc, shell);
-    let _ = RoundRect(
-        hdc,
+    let outer_clip = CreateRoundRectRgn(
         outer.left,
         outer.top,
         outer.right,
@@ -298,8 +298,26 @@ unsafe fn paint_overlay(hwnd: HWND, hdc: windows::Win32::Graphics::Gdi::HDC) {
         PILL_RADIUS,
         PILL_RADIUS,
     );
-    let _ = SelectObject(hdc, old);
-    let _ = DeleteObject(shell);
+    let _ = SelectClipRgn(hdc, outer_clip);
+
+    // Convex dome: lighter crown, darker base (no outline stroke).
+    const SHELL_BANDS: i32 = 10;
+    let band_h = (OVERLAY_HEIGHT + SHELL_BANDS - 1) / SHELL_BANDS;
+    for band in 0..SHELL_BANDS {
+        let y0 = outer.top + band * band_h;
+        let y1 = (y0 + band_h).min(outer.bottom);
+        let t = band as f32 / (SHELL_BANDS - 1) as f32;
+        let (r, g, b) = lerp_rgb((8, 0, 14), (72, 18, 88), 1.0 - t);
+        let brush = CreateSolidBrush(colorref(r, g, b));
+        let strip = RECT {
+            left: outer.left,
+            top: y0,
+            right: outer.right,
+            bottom: y1,
+        };
+        let _ = FillRect(hdc, &strip, brush);
+        let _ = DeleteObject(brush);
+    }
 
     let inner_clip = CreateRoundRectRgn(
         inner.left,
@@ -329,26 +347,40 @@ unsafe fn paint_overlay(hwnd: HWND, hdc: windows::Win32::Graphics::Gdi::HDC) {
         let _ = DeleteObject(brush);
     }
 
+    // Top gloss + bottom ambient shade for depth.
+    let gloss_h = 2;
+    let gloss = CreateSolidBrush(colorref(110, 45, 125));
+    let _ = FillRect(
+        hdc,
+        &RECT {
+            left: inner.left,
+            top: inner.top,
+            right: inner.right,
+            bottom: inner.top + gloss_h,
+        },
+        gloss,
+    );
+    let _ = DeleteObject(gloss);
+
+    let shade_h = 3;
+    let shade = CreateSolidBrush(colorref(12, 0, 18));
+    let _ = FillRect(
+        hdc,
+        &RECT {
+            left: inner.left,
+            top: inner.bottom - shade_h,
+            right: inner.right,
+            bottom: inner.bottom,
+        },
+        shade,
+    );
+    let _ = DeleteObject(shade);
+
     paint_volume_bars(hdc, inner, state.mode, &state.meter);
 
     let _ = SelectClipRgn(hdc, HRGN::default());
     let _ = DeleteObject(inner_clip);
-
-    let border = CreatePen(PS_SOLID, 1, colorref(38, 4, 52));
-    let old_pen = SelectObject(hdc, border);
-    let old_brush = SelectObject(hdc, GetStockObject(NULL_BRUSH));
-    let _ = RoundRect(
-        hdc,
-        outer.left,
-        outer.top,
-        outer.right,
-        outer.bottom,
-        PILL_RADIUS,
-        PILL_RADIUS,
-    );
-    let _ = SelectObject(hdc, old_brush);
-    let _ = SelectObject(hdc, old_pen);
-    let _ = DeleteObject(border);
+    let _ = DeleteObject(outer_clip);
 }
 
 /// Darker, inset plasma palette (purple → magenta → muted pink).

@@ -260,7 +260,9 @@ impl AppRuntime {
             .as_mut()
             .expect("audio just initialized")
             .start()
-            .map_err(RuntimeError::Audio)
+            .map_err(RuntimeError::Audio)?;
+        overlay::set_mode(&self.overlay_tx, overlay::OverlayMode::Recording);
+        Ok(())
     }
 
     fn disarm_recording(&mut self) -> Result<(), RuntimeError> {
@@ -274,6 +276,7 @@ impl AppRuntime {
             audio.disarm();
         }
         self.injection_target = None;
+        overlay::set_mode(&self.overlay_tx, overlay::OverlayMode::Hidden);
         Ok(())
     }
 
