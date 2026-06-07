@@ -27,7 +27,7 @@ impl FocusTarget {
                 cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
                 ..Default::default()
             };
-            if GetGUIThreadInfo(0, &mut info).0 == 0 {
+            if GetGUIThreadInfo(0, &mut info).is_err() {
                 return Some(Self(foreground));
             }
 
@@ -77,7 +77,7 @@ pub fn restore_focus(target: FocusTarget) -> bool {
         let _ = ShowWindow(hwnd, SW_SHOW);
         let _ = BringWindowToTop(hwnd);
         let fg_ok = SetForegroundWindow(hwnd).0 != 0;
-        let _ = SetFocus(Some(hwnd));
+        let _ = SetFocus(hwnd);
 
         if attached_fg {
             let _ = AttachThreadInput(current_thread, fg_thread, false);

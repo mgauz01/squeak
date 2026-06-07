@@ -35,7 +35,8 @@ impl MoonshineEngine {
         }
 
         info!("Loading Moonshine streaming model from {}", dir.display());
-        let inner = StreamingModel::load(&dir, DEFAULT_THREADS, &Quantization::default())
+        let threads = recommended_thread_count();
+        let inner = StreamingModel::load(&dir, threads, &Quantization::default())
             .map_err(|e| AsrError::Transcription(e.to_string()))?;
 
         Ok(Self { inner, tier })
@@ -52,7 +53,7 @@ impl MoonshineEngine {
                 dir.display()
             )));
         }
-        let inner = StreamingModel::load(dir, DEFAULT_THREADS, &Quantization::default())
+        let inner = StreamingModel::load(dir, recommended_thread_count(), &Quantization::default())
             .map_err(|e| AsrError::Transcription(e.to_string()))?;
         Ok(Self { inner, tier })
     }
