@@ -1,8 +1,9 @@
 use windows::Win32::Foundation::HWND;
 use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
+use windows::Win32::UI::Input::KeyboardAndMouse::SetFocus;
 use windows::Win32::UI::WindowsAndMessaging::{
     BringWindowToTop, GetForegroundWindow, GetGUIThreadInfo, GetWindowThreadProcessId,
-    GUITHREADINFO, SetFocus, SetForegroundWindow, ShowWindow, SW_SHOW,
+    GUITHREADINFO, SetForegroundWindow, ShowWindow, SW_SHOW,
 };
 
 /// Window that had keyboard focus when dictation started.
@@ -26,7 +27,7 @@ impl FocusTarget {
                 cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
                 ..Default::default()
             };
-            if GetGUIThreadInfo(0, &mut info).is_err() {
+            if GetGUIThreadInfo(0, &mut info).0 == 0 {
                 return Some(Self(foreground));
             }
 
@@ -75,8 +76,8 @@ pub fn restore_focus(target: FocusTarget) -> bool {
 
         let _ = ShowWindow(hwnd, SW_SHOW);
         let _ = BringWindowToTop(hwnd);
-        let fg_ok = SetForegroundWindow(hwnd).is_ok();
-        let _ = SetFocus(hwnd);
+        let fg_ok = SetForegroundWindow(hwnd).0 != 0;
+        let _ = SetFocus(Some(hwnd));
 
         if attached_fg {
             let _ = AttachThreadInput(current_thread, fg_thread, false);
