@@ -26,7 +26,10 @@ pub use model_download::{
     ensure_model, model_dir, model_is_complete, DownloadProgress, REQUIRED_MODEL_FILES,
 };
 #[cfg(windows)]
-pub use moonshine::{configure_ort_accelerator, MoonshineEngine};
+pub use moonshine::{
+    configure_ort_accelerator_for_model, is_likely_directml_inference_error,
+    ort_accelerator_summary, MoonshineEngine,
+};
 #[cfg(all(windows, feature = "parakeet"))]
 pub use parakeet::ParakeetEngine;
 #[cfg(all(windows, feature = "cohere"))]

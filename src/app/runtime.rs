@@ -10,8 +10,7 @@ use tracing::{info, warn};
 use crate::app::{AppEvent, UserAction};
 use crate::app::single_instance::SingleInstance;
 use crate::app::state::{AppState, StateMachine, TransitionError};
-use crate::asr::{AsrError, AsrWorker};
-use crate::asr::moonshine::ort_accelerator_summary;
+use crate::asr::{AsrError, AsrWorker, ort_accelerator_summary};
 use crate::audio::{
     log_audio_stats, maybe_write_debug_wav, peak_normalize, trim_leading_silence,
     trim_trailing_silence, AudioCapture, AudioError, AudioLevelMeter, TARGET_SAMPLE_RATE,
