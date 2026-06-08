@@ -136,7 +136,7 @@ fn run_tray(
     let mut grammar_ids: Vec<(muda::MenuId, String)> = Vec::new();
     #[cfg(not(any(feature = "gec-tiny", feature = "gec-coedit", feature = "gec-llama")))]
     let grammar_ids: Vec<(muda::MenuId, String)> = Vec::new();
-    #[cfg(any(feature = "gec-tiny", feature = "gec-coedit", feature = "gec-llama")))]
+    #[cfg(any(feature = "gec-tiny", feature = "gec-coedit", feature = "gec-llama"))]
     let grammar_menu = {
         let grammar_menu = Submenu::new("Grammar correction (experimental)", true);
         append_grammar_item(
