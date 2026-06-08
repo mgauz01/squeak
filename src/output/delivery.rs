@@ -10,7 +10,7 @@ use crate::output::clipboard::{self, ClipboardError};
 use crate::output::inject::{self, InjectError};
 use crate::platform::win::focus::{self, FocusTarget};
 
-const FOCUS_SETTLE_MS: u64 = 40;
+const FOCUS_SETTLE_MS: u64 = 20;
 
 #[derive(Debug, Error)]
 pub enum DeliveryError {
@@ -57,10 +57,11 @@ impl DeliveryChain {
             return DeliveryOutcome::CopiedToClipboard;
         }
 
-        let outcome = if try_inject(text, captured_focus) {
-            DeliveryOutcome::Injected
-        } else if try_clipboard_paste(text, captured_focus) {
+        // Clipboard+Ctrl+V is O(1) SendInput; unicode inject is O(n) keystrokes and can take seconds.
+        let outcome = if try_clipboard_paste(text, captured_focus) {
             DeliveryOutcome::PastedViaClipboard
+        } else if try_inject(text, captured_focus) {
+            DeliveryOutcome::Injected
         } else {
             warn!("Could not inject at caret; copying transcript to clipboard");
             match clipboard::set_text(text) {
@@ -100,12 +101,22 @@ impl DeliveryChain {
     }
 }
 
+fn settle_focus(target: FocusTarget) -> bool {
+    if focus::is_target_focused(target) {
+        return true;
+    }
+    let restored = focus::restore_focus(target);
+    if !focus::is_target_focused(target) {
+        thread::sleep(Duration::from_millis(FOCUS_SETTLE_MS));
+    }
+    restored || focus::is_target_focused(target)
+}
+
 fn try_inject(text: &str, captured_focus: Option<FocusTarget>) -> bool {
     if let Some(target) = captured_focus {
-        let restored = focus::restore_focus(target);
-        thread::sleep(Duration::from_millis(FOCUS_SETTLE_MS));
+        let _ = settle_focus(target);
         if inject::inject_unicode(text).is_ok() {
-            if focus::is_target_focused(target) || restored {
+            if focus::is_target_focused(target) {
                 return true;
             }
         }
@@ -124,12 +135,9 @@ fn try_clipboard_paste(text: &str, captured_focus: Option<FocusTarget>) -> bool 
     }
 
     if let Some(target) = captured_focus {
-        let restored = focus::restore_focus(target);
-        thread::sleep(Duration::from_millis(FOCUS_SETTLE_MS));
-        if inject::inject_paste().is_ok() {
-            if focus::is_target_focused(target) || restored {
-                return true;
-            }
+        let _ = settle_focus(target);
+        if inject::inject_paste().is_ok() && focus::is_target_focused(target) {
+            return true;
         }
     }
 

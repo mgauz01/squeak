@@ -96,6 +96,26 @@ pub fn trim_leading_silence(samples: &mut Vec<f32>, threshold: f32, hop: usize) 
     true
 }
 
+/// Drop trailing silence so batch ASR does not process dead air after speech ends.
+pub fn trim_trailing_silence(samples: &mut Vec<f32>, threshold: f32, hop: usize) {
+    if samples.is_empty() {
+        return;
+    }
+    let hop = hop.max(1);
+    let mut end = 0usize;
+    for (i, chunk) in samples.chunks(hop).enumerate().rev() {
+        let peak = chunk.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
+        if peak >= threshold {
+            end = (i + 1) * hop;
+            break;
+        }
+    }
+    end = end.min(samples.len());
+    if end > 0 && end < samples.len() {
+        samples.truncate(end);
+    }
+}
+
 pub fn log_audio_stats(stats: AudioStats) {
     info!(
         samples = stats.samples,
@@ -200,5 +220,14 @@ mod tests {
     fn trim_leading_silence_all_silent_fails() {
         let mut samples = vec![0.0; 3200];
         assert!(!trim_leading_silence(&mut samples, 0.012, 160));
+    }
+
+    #[test]
+    fn trim_trailing_silence_keeps_speech() {
+        let mut samples = vec![0.2; 3200];
+        samples.extend(std::iter::repeat_n(0.0, 4800));
+        trim_trailing_silence(&mut samples, 0.012, 160);
+        assert!(samples.len() < 8000);
+        assert!(samples.iter().any(|&s| s.abs() > 0.1));
     }
 }

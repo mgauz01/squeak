@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
 
-use crossbeam_channel::{Receiver, Sender, TryRecvError};
+use crossbeam_channel::{Receiver, RecvTimeoutError, Sender};
 use tracing::info;
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{BOOL, COLORREF, HWND, LPARAM, LRESULT, POINT, WPARAM};
@@ -135,13 +135,11 @@ unsafe fn run_overlay(
             DispatchMessageW(&msg);
         }
 
-        match cmd_rx.try_recv() {
+        match cmd_rx.recv_timeout(std::time::Duration::from_millis(16)) {
             Ok(mode) => apply_overlay_mode(hwnd, mode),
-            Err(TryRecvError::Empty) => {}
-            Err(TryRecvError::Disconnected) => break,
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => break,
         }
-
-        thread::sleep(std::time::Duration::from_millis(10));
     }
 
     free_overlay_state(hwnd);

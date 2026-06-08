@@ -61,6 +61,9 @@ impl AsrWorker {
     }
 
     pub fn preload_in_background(&self, model: AsrModelId) {
+        if self.is_ready(model) {
+            return;
+        }
         let (reply_tx, reply_rx) = crossbeam_channel::bounded(1);
         if self
             .tx

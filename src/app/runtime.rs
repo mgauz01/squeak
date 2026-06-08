@@ -12,8 +12,8 @@ use crate::app::single_instance::SingleInstance;
 use crate::app::state::{AppState, StateMachine, TransitionError};
 use crate::asr::{AsrError, AsrWorker};
 use crate::audio::{
-    log_audio_stats, maybe_write_debug_wav, peak_normalize, trim_leading_silence, AudioCapture,
-    AudioError, AudioLevelMeter, TARGET_SAMPLE_RATE,
+    log_audio_stats, maybe_write_debug_wav, peak_normalize, trim_leading_silence,
+    trim_trailing_silence, AudioCapture, AudioError, AudioLevelMeter, TARGET_SAMPLE_RATE,
 };
 use crate::config::{AsrModelId, Config, GrammarModelId};
 use crate::hotkeys;
@@ -80,6 +80,7 @@ impl AppRuntime {
 
     pub fn run(mut self) -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("Loading speech model in background (first launch may take a minute)...");
+        self.warm_audio_capture();
         self.asr.preload_in_background(self.config.asr_model());
         if self.config.grammar_enabled() {
             self.grammar
@@ -94,7 +95,7 @@ impl AppRuntime {
         info!("Squeak running — hold Win+Ctrl to dictate, Shift+Alt+Z to paste last");
 
         while self.running.load(Ordering::Relaxed) {
-            match self.events.recv_timeout(Duration::from_millis(100)) {
+            match self.events.recv_timeout(Duration::from_millis(16)) {
                 Ok(event) => {
                     if let Err(err) = self.handle_event(event) {
                         eprintln!("Squeak error: {err}");
@@ -249,23 +250,32 @@ impl AppRuntime {
         Ok(())
     }
 
+    fn warm_audio_capture(&mut self) {
+        if self.audio.is_some() {
+            return;
+        }
+        match AudioCapture::try_new_with_meter(Some(Arc::clone(&self.audio_meter))) {
+            Ok(capture) => {
+                self.audio = Some(capture);
+                info!("Microphone pre-initialized");
+            }
+            Err(err) => warn!("Microphone pre-init failed (will retry on dictate): {err}"),
+        }
+    }
+
     fn arm_recording(&mut self) -> Result<(), RuntimeError> {
+        overlay::set_mode(&self.overlay_tx, overlay::OverlayMode::Recording);
+
         if self.injection_target.is_none() {
             self.injection_target = FocusTarget::capture();
         }
-        if self.audio.is_none() {
-            self.audio = Some(
-                AudioCapture::try_new_with_meter(Some(Arc::clone(&self.audio_meter)))
-                    .map_err(RuntimeError::Audio)?,
-            );
-        }
+        self.warm_audio_capture();
         self.audio
             .as_mut()
-            .expect("audio just initialized")
+            .ok_or(RuntimeError::Message("microphone not available".into()))?
             .start()
             .map_err(RuntimeError::Audio)?;
         self.asr.preload_in_background(self.config.asr_model());
-        overlay::set_mode(&self.overlay_tx, overlay::OverlayMode::Recording);
         Ok(())
     }
 
@@ -341,6 +351,8 @@ impl AppRuntime {
                 stats.duration_ms
             ));
         }
+
+        trim_trailing_silence(&mut samples, 0.012, (TARGET_SAMPLE_RATE / 100) as usize);
 
         if samples.len() < 1280 {
             return self.fail_processing(&format!(
@@ -430,7 +442,7 @@ impl AppRuntime {
         match outcome {
             DeliveryOutcome::Injected | DeliveryOutcome::PastedViaClipboard => {
                 eprintln!(
-                    "Transcript pasted ({total_ms} ms: capture {capture_ms}, ASR {asr_ms}, paste {deliver_ms})."
+                    "Transcript pasted ({total_ms} ms: capture {capture_ms}, ASR {asr_ms}, paste {deliver_ms}; audio {trimmed_audio_ms} ms)."
                 );
             }
             DeliveryOutcome::CopiedToClipboard | DeliveryOutcome::SavedOnly => {}

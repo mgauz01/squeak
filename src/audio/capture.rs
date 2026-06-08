@@ -132,11 +132,11 @@ impl AudioCapture {
         if let Some(stream) = self.stream.take() {
             let _ = stream.pause();
             // Let the cpal callback drain its final partial buffer into our mutex.
-            std::thread::sleep(Duration::from_millis(25));
+            std::thread::sleep(Duration::from_millis(15));
             drop(stream);
         }
-        let raw = self.buffer.lock().unwrap().clone();
-        let mono = downmix_to_mono(&raw, self.channels);
+        let raw = std::mem::take(&mut *self.buffer.lock().unwrap());
+        let mono = downmix_to_mono(raw, self.channels);
         resample_to_16k_mono(&mono, self.input_sample_rate)
     }
 
@@ -158,10 +158,10 @@ fn append_samples(buffer: &Arc<Mutex<Vec<f32>>>, data: &[f32]) {
     buffer.lock().unwrap().extend_from_slice(data);
 }
 
-fn downmix_to_mono(samples: &[f32], channels: u16) -> Vec<f32> {
+fn downmix_to_mono(samples: Vec<f32>, channels: u16) -> Vec<f32> {
     let ch = channels.max(1) as usize;
     if ch == 1 {
-        return samples.to_vec();
+        return samples;
     }
     samples
         .chunks(ch)
