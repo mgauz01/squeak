@@ -3,12 +3,12 @@ use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 
 use crossbeam_channel::{Receiver, Sender};
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::asr::engine::{AsrEngine, AsrError};
 use crate::asr::factory::create_engine;
 use crate::asr::provision::{ensure_model, DownloadProgress};
-use crate::asr::moonshine::configure_ort_accelerator;
+use crate::asr::moonshine::{configure_ort_accelerator_for_model, is_likely_directml_inference_error};
 use crate::config::AsrModelId;
 
 enum WorkerCommand {
@@ -39,14 +39,13 @@ pub struct AsrWorker {
 
 impl AsrWorker {
     pub fn spawn(use_directml: bool) -> Self {
-        configure_ort_accelerator(use_directml);
         let (tx, rx) = crossbeam_channel::unbounded();
         let downloading = Arc::new(AtomicBool::new(false));
         let downloading_flag = Arc::clone(&downloading);
 
         let handle = thread::Builder::new()
             .name("squeak-asr".into())
-            .spawn(move || worker_main(rx, downloading_flag))
+            .spawn(move || worker_main(rx, downloading_flag, use_directml))
             .expect("failed to spawn ASR worker thread");
 
         Self {
@@ -140,12 +139,16 @@ impl Drop for AsrWorker {
 struct WorkerState {
     loaded: Option<AsrModelId>,
     engine: Option<Box<dyn AsrEngine>>,
+    prefer_directml: bool,
+    loaded_on_directml: bool,
 }
 
-fn worker_main(rx: Receiver<WorkerCommand>, downloading: Arc<AtomicBool>) {
+fn worker_main(rx: Receiver<WorkerCommand>, downloading: Arc<AtomicBool>, prefer_directml: bool) {
     let mut state = WorkerState {
         loaded: None,
         engine: None,
+        prefer_directml,
+        loaded_on_directml: false,
     };
 
     for cmd in rx {
@@ -202,7 +205,19 @@ fn ensure_ready(
 
     let dir = download_result?;
 
-    state.engine = Some(create_engine(model, &dir)?);
+    load_engine(state, model, &dir)?;
+    Ok(())
+}
+
+fn load_engine(
+    state: &mut WorkerState,
+    model: AsrModelId,
+    dir: &std::path::Path,
+) -> Result<(), AsrError> {
+    configure_ort_accelerator_for_model(model, state.prefer_directml);
+    state.loaded_on_directml =
+        state.prefer_directml && model.compatible_with_directml() && cfg!(feature = "directml");
+    state.engine = Some(create_engine(model, dir)?);
     state.loaded = Some(model);
     info!("Speech model warm-loaded: {}", model.config_key());
     Ok(())
@@ -217,8 +232,43 @@ fn transcribe_loaded(
         return Err(AsrError::Downloading);
     }
 
+    let model = state.loaded.ok_or(AsrError::NotLoaded)?;
     let engine = state.engine.as_mut().ok_or(AsrError::NotLoaded)?;
-    engine.transcribe(samples)
+    match engine.transcribe(samples) {
+        Ok(text) => Ok(text),
+        Err(err) if state.loaded_on_directml && is_transient_directml_error(&err) => {
+            warn!("DirectML transcription failed ({err}); reloading model on CPU");
+            retry_transcribe_on_cpu(state, model, samples)
+        }
+        Err(err) => Err(err),
+    }
+}
+
+fn is_transient_directml_error(err: &AsrError) -> bool {
+    match err {
+        AsrError::Transcription(message) | AsrError::Other(message) => {
+            is_likely_directml_inference_error(message)
+        }
+        _ => false,
+    }
+}
+
+fn retry_transcribe_on_cpu(
+    state: &mut WorkerState,
+    model: AsrModelId,
+    samples: &[f32],
+) -> Result<String, AsrError> {
+    state.engine = None;
+    state.loaded_on_directml = false;
+    configure_ort_accelerator_for_model(model, false);
+    let dir = crate::asr::provision::model_dir(model);
+    load_engine(state, model, &dir)?;
+    eprintln!("Speech model reloaded on CPU after DirectML failure.");
+    state
+        .engine
+        .as_mut()
+        .ok_or(AsrError::NotLoaded)?
+        .transcribe(samples)
 }
 
 #[cfg(test)]

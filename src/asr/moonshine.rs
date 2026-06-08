@@ -139,17 +139,34 @@ mod tests {
         assert_eq!(&padded[..1284], &input[..]);
         assert!(padded[1284..].iter().all(|&v| v == 0.0));
     }
+
+    #[test]
+    fn detects_directml_slice_errors() {
+        assert!(is_likely_directml_inference_error(
+            "inference error: Non-zero status code returned while running Slice node. 80070057"
+        ));
+        assert!(!is_likely_directml_inference_error("recording too short"));
+    }
 }
 
-/// Apply ORT accelerator preference before any model load (call once at startup).
-pub fn configure_ort_accelerator(use_directml: bool) {
+/// Apply ORT accelerator preference immediately before loading a model session.
+pub fn configure_ort_accelerator_for_model(model: AsrModelId, prefer_directml: bool) {
     use transcribe_rs::{set_ort_accelerator, OrtAccelerator};
+
+    let use_directml = prefer_directml && model.compatible_with_directml();
+
+    if prefer_directml && !model.compatible_with_directml() {
+        warn!(
+            "DirectML is not compatible with {} (batch TDT Slice ops fail on DML); using CPU",
+            model.config_key()
+        );
+    }
 
     if use_directml {
         #[cfg(feature = "directml")]
         {
             set_ort_accelerator(OrtAccelerator::DirectMl);
-            info!("ORT accelerator: DirectML");
+            info!("ORT accelerator for {}: DirectML", model.config_key());
             return;
         }
         #[cfg(not(feature = "directml"))]
@@ -157,7 +174,27 @@ pub fn configure_ort_accelerator(use_directml: bool) {
     }
 
     set_ort_accelerator(OrtAccelerator::CpuOnly);
-    info!("ORT accelerator: CPU");
+    info!("ORT accelerator for {}: CPU", model.config_key());
+}
+
+pub fn ort_accelerator_summary(model: AsrModelId, prefer_directml: bool) -> &'static str {
+    if prefer_directml && model.compatible_with_directml() {
+        #[cfg(feature = "directml")]
+        {
+            return "DirectML";
+        }
+    }
+    "CPU"
+}
+
+/// True when a transcription error likely came from the DirectML execution provider.
+pub fn is_likely_directml_inference_error(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("80070057")
+        || lower.contains("e_invalidarg")
+        || lower.contains("dml")
+        || lower.contains("directml")
+        || (lower.contains("slice") && lower.contains("inference"))
 }
 
 pub fn recommended_thread_count() -> usize {

@@ -11,6 +11,7 @@ use crate::app::{AppEvent, UserAction};
 use crate::app::single_instance::SingleInstance;
 use crate::app::state::{AppState, StateMachine, TransitionError};
 use crate::asr::{AsrError, AsrWorker};
+use crate::asr::moonshine::ort_accelerator_summary;
 use crate::audio::{
     log_audio_stats, maybe_write_debug_wav, peak_normalize, trim_leading_silence,
     trim_trailing_silence, AudioCapture, AudioError, AudioLevelMeter, TARGET_SAMPLE_RATE,
@@ -88,10 +89,19 @@ impl AppRuntime {
         }
 
         eprintln!("Hold Win+Ctrl to dictate. Shift+Alt+Z pastes last transcript. Orange circle in the taskbar = Squeak running.");
+        let model = self.config.asr_model();
         eprintln!(
-            "Using {} — tray → Speech model to change (Small recommended).",
-            self.config.asr_model().tray_summary()
+            "Using {} on {} — tray → Speech model to change.",
+            model.tray_summary(),
+            ort_accelerator_summary(model, self.config.directml)
         );
+        if self.config.directml && !model.compatible_with_directml() {
+            eprintln!(
+                "Note: DirectML does not work with {} (ONNX Slice ops fail on GPU). \
+                 ASR runs on CPU. For GPU acceleration, switch to Moonshine in the tray.",
+                model.tray_summary()
+            );
+        }
         info!("Squeak running — hold Win+Ctrl to dictate, Shift+Alt+Z to paste last");
 
         while self.running.load(Ordering::Relaxed) {
