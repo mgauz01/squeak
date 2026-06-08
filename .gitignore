@@ -1,4 +1,6 @@
 /target/
+/dist/
+/installer/wix/Harvested.wxs
 **/*.rs.bk
 *.pdb
 *.exe

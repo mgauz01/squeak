@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  WiX 3.x installer for Squeak.
+  Build via installer/build.ps1 (stages binaries, runs heat, candle, light).
+-->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product
+    Id="*"
+    Name="Squeak"
+    Language="1033"
+    Version="$(var.ProductVersion)"
+    Manufacturer="$(var.ProductManufacturer)"
+    UpgradeCode="8F3E2B1A-9C4D-4E5F-A6B7-8C9D0E1F2A3B">
+
+    <Package
+      InstallerVersion="500"
+      Compressed="yes"
+      InstallScope="perMachine"
+      Platform="x64"
+      Description="Local Windows voice dictation"
+      Manufacturer="$(var.ProductManufacturer)" />
+
+    <MajorUpgrade
+      AllowSameVersionUpgrades="yes"
+      DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Feature Id="MainFeature" Title="Squeak" Level="1">
+      <ComponentGroupRef Id="AppBinaries" />
+      <ComponentGroupRef Id="AppShortcuts" />
+    </Feature>
+  </Product>
+
+  <Fragment>
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="INSTALLFOLDER" Name="Squeak" />
+      </Directory>
+      <Directory Id="ProgramMenuFolder">
+        <Directory Id="ApplicationProgramsFolder" Name="Squeak" />
+      </Directory>
+    </Directory>
+  </Fragment>
+
+  <Fragment>
+    <DirectoryRef Id="INSTALLFOLDER">
+      <Component
+        Id="SqueakExeComponent"
+        Guid="E1F2A3B4-C5D6-4E7F-8A9B-0C1D2E3F4A5B">
+        <File
+          Id="SqueakEXE"
+          Source="$(var.StagingDir)\squeak.exe"
+          KeyPath="yes"
+          Checksum="yes" />
+      </Component>
+    </DirectoryRef>
+  </Fragment>
+
+  <Fragment>
+    <DirectoryRef Id="ApplicationProgramsFolder">
+      <Component
+        Id="StartMenuShortcutComponent"
+        Guid="B2C3D4E5-F6A7-4B8C-9D0E-1F2A3B4C5D6E">
+        <Shortcut
+          Id="ApplicationStartMenuShortcut"
+          Name="Squeak"
+          Description="Local voice dictation (Win+Ctrl push-to-talk)"
+          Target="[#SqueakEXE]"
+          WorkingDirectory="INSTALLFOLDER" />
+        <RemoveFolder Id="RemoveStartMenuFolder" Directory="ApplicationProgramsFolder" On="uninstall" />
+        <RegistryValue
+          Root="HKLM"
+          Key="Software\Squeak"
+          Name="Installed"
+          Type="integer"
+          Value="1"
+          KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+  </Fragment>
+
+  <Fragment>
+    <ComponentGroup Id="AppBinaries">
+      <ComponentRef Id="SqueakExeComponent" />
+      <ComponentGroupRef Id="HarvestedDlls" />
+    </ComponentGroup>
+    <ComponentGroup Id="AppShortcuts">
+      <ComponentRef Id="StartMenuShortcutComponent" />
+    </ComponentGroup>
+  </Fragment>
+
+  <?include Harvested.wxs ?>
+</Wix>
