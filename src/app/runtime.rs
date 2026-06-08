@@ -350,8 +350,7 @@ impl AppRuntime {
     }
 
     fn handle_open_settings(&self) -> Result<(), RuntimeError> {
-        use crate::config::paths::config_path;
-        let path = config_path();
+        let path = crate::config::config_path();
         if !path.exists() {
             self.save_config()?;
         }

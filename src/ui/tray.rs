@@ -1,4 +1,3 @@
-use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
@@ -99,63 +98,17 @@ fn append_grammar_item(
     Ok(())
 }
 
-#[derive(Debug, Clone, Copy)]
-struct TrayToggleState {
-    directml: bool,
-    xnnpack: bool,
-    autostart: bool,
-}
-
-#[derive(Clone, Copy)]
-enum TrayBoolSetting {
-    DirectMl,
-    Xnnpack,
-    Autostart,
-}
-
-impl TrayBoolSetting {
-    fn flip(self, toggles: &mut TrayToggleState) -> (bool, UserAction, &'static str) {
-        match self {
-            Self::DirectMl => {
-                toggles.directml = !toggles.directml;
-                (
-                    toggles.directml,
-                    UserAction::ToggleDirectMl(toggles.directml),
-                    "DirectML",
-                )
-            }
-            Self::Xnnpack => {
-                toggles.xnnpack = !toggles.xnnpack;
-                (
-                    toggles.xnnpack,
-                    UserAction::ToggleXnnpack(toggles.xnnpack),
-                    "XNNPACK",
-                )
-            }
-            Self::Autostart => {
-                toggles.autostart = !toggles.autostart;
-                (
-                    toggles.autostart,
-                    UserAction::ToggleAutostart(toggles.autostart),
-                    "start with Windows",
-                )
-            }
-        }
-    }
-}
-
 fn on_bool_toggle(
-    setting: TrayBoolSetting,
+    label: &'static str,
     item: &CheckMenuItem,
-    toggles: &RefCell<TrayToggleState>,
+    flag: &AtomicBool,
     tx: &Sender<AppEvent>,
+    action: fn(bool) -> UserAction,
 ) {
-    let (enabled, action, label) = {
-        let mut state = toggles.borrow_mut();
-        setting.flip(&mut state)
-    };
+    let enabled = !flag.load(Ordering::Relaxed);
+    flag.store(enabled, Ordering::Relaxed);
     let _ = item.set_checked(enabled);
-    let _ = tx.send(AppEvent::UserAction(action));
+    let _ = tx.send(AppEvent::UserAction(action(enabled)));
     eprintln!(
         "{} {label}…",
         if enabled { "Enabling" } else { "Disabling" }
@@ -256,11 +209,9 @@ fn run_tray(
     let open_config_item = MenuItem::new("Open config.toml…", true, None);
     let open_config_id = open_config_item.id().clone();
 
-    let toggle_state = RefCell::new(TrayToggleState {
-        directml: init.directml,
-        xnnpack: init.xnnpack,
-        autostart: init.autostart,
-    });
+    let directml_on = AtomicBool::new(init.directml);
+    let xnnpack_on = AtomicBool::new(init.xnnpack);
+    let autostart_on = AtomicBool::new(init.autostart);
 
     #[cfg(not(any(feature = "gec-tiny", feature = "gec-coedit", feature = "gec-llama")))]
     let _ = (init.grammar_enabled, init.grammar_model);
@@ -354,28 +305,31 @@ fn run_tray(
             }
             if directml_id == event.id() {
                 on_bool_toggle(
-                    TrayBoolSetting::DirectMl,
+                    "DirectML",
                     &directml_item,
-                    &toggle_state,
+                    &directml_on,
                     &event_tx_menu,
+                    UserAction::ToggleDirectMl,
                 );
                 return;
             }
             if xnnpack_id == event.id() {
                 on_bool_toggle(
-                    TrayBoolSetting::Xnnpack,
+                    "XNNPACK",
                     &xnnpack_item,
-                    &toggle_state,
+                    &xnnpack_on,
                     &event_tx_menu,
+                    UserAction::ToggleXnnpack,
                 );
                 return;
             }
             if autostart_id == event.id() {
                 on_bool_toggle(
-                    TrayBoolSetting::Autostart,
+                    "start with Windows",
                     &autostart_item,
-                    &toggle_state,
+                    &autostart_on,
                     &event_tx_menu,
+                    UserAction::ToggleAutostart,
                 );
                 return;
             }
