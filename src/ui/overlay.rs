@@ -29,6 +29,7 @@ use crate::overlay_grow::{
     display_width, recording_width_fraction, OVERLAY_HEIGHT, OVERLAY_WIDTH, PILL_CORNER,
     PILL_MIN_WIDTH,
 };
+use crate::ui_visual::{phase_uses_grow_animation, ptt_hold_fraction, ui_phase, UiPhase};
 
 const PILL_INSET: i32 = 5;
 const OVERLAY_TOP_MARGIN: i32 = 16;
@@ -37,20 +38,13 @@ const ANIM_MS: u32 = 50;
 const PLASMA_STRIPS: i32 = 24;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum OverlayMode {
-    Hidden = 0,
-    Recording = 1,
-    Processing = 2,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OverlayCommand {
-    SetMode(OverlayMode),
+    SetPhase(UiPhase),
     AsrReady,
 }
 
 struct OverlayWindowState {
-    mode: OverlayMode,
+    phase: UiPhase,
     meter: Arc<AudioLevelMeter>,
     anchor_center_x: i32,
     anchor_y: i32,
@@ -76,18 +70,13 @@ pub fn spawn(
     Ok(())
 }
 
-pub fn sync(tx: &Sender<OverlayCommand>, state: AppState) {
-    let mode = match state {
-        AppState::RecordingPtt | AppState::RecordingHandsFree => OverlayMode::Recording,
-        AppState::Processing | AppState::Injecting => OverlayMode::Processing,
-        _ => OverlayMode::Hidden,
-    };
-    set_mode(tx, mode);
+pub fn sync(tx: &Sender<OverlayCommand>, app: AppState, mic_armed: bool) {
+    set_phase(tx, ui_phase(app, mic_armed));
 }
 
-/// Push an overlay mode directly (e.g. show pill as soon as Win+Ctrl is pressed).
-pub fn set_mode(tx: &Sender<OverlayCommand>, mode: OverlayMode) {
-    let _ = tx.send(OverlayCommand::SetMode(mode));
+/// Push overlay phase directly (e.g. show pill as soon as Win+Ctrl is pressed).
+pub fn set_phase(tx: &Sender<OverlayCommand>, phase: UiPhase) {
+    let _ = tx.send(OverlayCommand::SetPhase(phase));
 }
 
 /// ASR finished loading — complete the horizontal grow-in animation.
@@ -125,7 +114,7 @@ unsafe fn run_overlay(
     )?;
 
     let state = Box::new(OverlayWindowState {
-        mode: OverlayMode::Hidden,
+        phase: UiPhase::Hidden,
         meter,
         anchor_center_x,
         anchor_y,
@@ -158,7 +147,7 @@ unsafe fn run_overlay(
         }
 
         match cmd_rx.recv_timeout(std::time::Duration::from_millis(16)) {
-            Ok(OverlayCommand::SetMode(mode)) => apply_overlay_mode(hwnd, mode),
+            Ok(OverlayCommand::SetPhase(phase)) => apply_overlay_phase(hwnd, phase),
             Ok(OverlayCommand::AsrReady) => apply_asr_ready(hwnd),
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => break,
@@ -180,10 +169,10 @@ unsafe fn apply_pill_window_shape(hwnd: HWND, width: i32) {
 }
 
 unsafe fn update_pill_geometry(hwnd: HWND, state: &mut OverlayWindowState) {
-    let width = match state.mode {
-        OverlayMode::Hidden => return,
-        OverlayMode::Processing => OVERLAY_WIDTH,
-        OverlayMode::Recording => {
+    let width = match state.phase {
+        UiPhase::Hidden => return,
+        UiPhase::Processing => OVERLAY_WIDTH,
+        UiPhase::Armed | UiPhase::RecordingPtt | UiPhase::RecordingHandsFree => {
             let now = GetTickCount64();
             let frac = recording_width_fraction(
                 state.grow_start_ms,
@@ -218,26 +207,29 @@ unsafe fn reset_recording_grow(state: &mut OverlayWindowState) {
     state.current_width = PILL_MIN_WIDTH;
 }
 
-unsafe fn apply_overlay_mode(hwnd: HWND, mode: OverlayMode) {
+unsafe fn apply_overlay_phase(hwnd: HWND, phase: UiPhase) {
     let Some(state) = overlay_state_mut(hwnd) else {
         return;
     };
-    if state.mode == mode {
+    if state.phase == phase {
         return;
     }
-    state.mode = mode;
+    let prev = state.phase;
+    state.phase = phase;
 
-    match mode {
-        OverlayMode::Hidden => {
+    match phase {
+        UiPhase::Hidden => {
             let _ = ShowWindow(hwnd, SW_HIDE);
         }
-        OverlayMode::Recording => {
-            reset_recording_grow(state);
+        UiPhase::Armed | UiPhase::RecordingPtt | UiPhase::RecordingHandsFree => {
+            if prev == UiPhase::Hidden {
+                reset_recording_grow(state);
+            }
             let _ = ShowWindow(hwnd, SW_SHOW);
             update_pill_geometry(hwnd, state);
             let _ = InvalidateRect(hwnd, None, false);
         }
-        OverlayMode::Processing => {
+        UiPhase::Processing => {
             state.current_width = OVERLAY_WIDTH;
             let _ = ShowWindow(hwnd, SW_SHOW);
             update_pill_geometry(hwnd, state);
@@ -250,7 +242,7 @@ unsafe fn apply_asr_ready(hwnd: HWND) {
     let Some(state) = overlay_state_mut(hwnd) else {
         return;
     };
-    if state.mode != OverlayMode::Recording || state.asr_ready {
+    if !phase_uses_grow_animation(state.phase) || state.asr_ready {
         return;
     }
     state.asr_ready = true;
@@ -337,10 +329,10 @@ unsafe extern "system" fn overlay_wnd_proc(
         }
         WM_TIMER if wparam.0 == ANIM_TIMER_ID => {
             if let Some(state) = overlay_state_mut(hwnd) {
-                if state.mode == OverlayMode::Recording {
+                if phase_uses_grow_animation(state.phase) {
                     update_pill_geometry(hwnd, state);
                 }
-                if state.mode != OverlayMode::Hidden {
+                if state.phase != UiPhase::Hidden {
                     let _ = InvalidateRect(hwnd, None, false);
                 }
             }
@@ -382,7 +374,7 @@ unsafe fn paint_overlay(hwnd: HWND, hdc: windows::Win32::Graphics::Gdi::HDC, wid
     let Some(state) = overlay_state_mut(hwnd) else {
         return;
     };
-    if state.mode == OverlayMode::Hidden {
+    if state.phase == UiPhase::Hidden {
         return;
     }
 
@@ -437,7 +429,7 @@ unsafe fn paint_overlay(hwnd: HWND, hdc: windows::Win32::Graphics::Gdi::HDC, wid
         let x0 = inner.left + i * strip_w;
         let x1 = (x0 + strip_w).min(inner.right);
         let x_norm = (i as f32 + 0.5) / PLASMA_STRIPS as f32;
-        let (r, g, b) = plasma_rgb(x_norm, 0.5, tick_s as f32, state.mode);
+        let (r, g, b) = plasma_rgb(x_norm, 0.5, tick_s as f32, state.phase);
         let brush = CreateSolidBrush(colorref(r, g, b));
         let strip = RECT {
             left: x0,
@@ -466,7 +458,11 @@ unsafe fn paint_overlay(hwnd: HWND, hdc: windows::Win32::Graphics::Gdi::HDC, wid
     );
     let _ = DeleteObject(shade);
 
-    paint_volume_bars(hdc, inner, state.mode, &state.meter);
+    if state.phase == UiPhase::Armed {
+        paint_ptt_hold_bar(hdc, inner, state.grow_start_ms);
+    } else {
+        paint_volume_bars(hdc, inner, state.phase, &state.meter);
+    }
 
     let _ = SelectClipRgn(hdc, HRGN::default());
     let _ = DeleteObject(inner_clip);
@@ -474,11 +470,17 @@ unsafe fn paint_overlay(hwnd: HWND, hdc: windows::Win32::Graphics::Gdi::HDC, wid
 }
 
 /// Darker, inset plasma palette (purple → magenta → muted pink).
-fn plasma_rgb(x: f32, y: f32, t: f32, mode: OverlayMode) -> (u8, u8, u8) {
-    let speed = if mode == OverlayMode::Processing {
-        0.35
-    } else {
-        0.75
+fn plasma_rgb(x: f32, y: f32, t: f32, phase: UiPhase) -> (u8, u8, u8) {
+    let speed = match phase {
+        UiPhase::Processing => 0.35,
+        UiPhase::Armed => 0.45,
+        _ => 0.75,
+    };
+    let brightness = match phase {
+        UiPhase::Armed => 0.55,
+        UiPhase::RecordingHandsFree => 1.1,
+        UiPhase::Processing => 0.88,
+        _ => 1.0,
     };
     let tt = t * speed;
     let v = (x * 4.8 + tt).sin()
@@ -487,13 +489,49 @@ fn plasma_rgb(x: f32, y: f32, t: f32, mode: OverlayMode) -> (u8, u8, u8) {
     let v = ((v + 2.4) / 4.8).clamp(0.0, 1.0);
     let v = v * 0.72 + 0.08;
 
-    if v < 0.4 {
+    let base = if v < 0.4 {
         lerp_rgb((14, 0, 22), (48, 0, 58), v / 0.4)
     } else if v < 0.72 {
         lerp_rgb((48, 0, 58), (98, 10, 82), (v - 0.4) / 0.32)
     } else {
-        lerp_rgb((98, 10, 82), (150, 40, 118), (v - 0.72) / 0.28)
+        lerp_rgb((98, 10, 82), (150, 40, 118), ((v - 0.72) / 0.28).min(1.0))
+    };
+    scale_rgb(base, brightness)
+}
+
+fn scale_rgb((r, g, b): (u8, u8, u8), factor: f32) -> (u8, u8, u8) {
+    (
+        ((r as f32) * factor).min(255.0) as u8,
+        ((g as f32) * factor).min(255.0) as u8,
+        ((b as f32) * factor).min(255.0) as u8,
+    )
+}
+
+/// Bottom-edge fill showing Win+Ctrl hold progress toward PTT (armed only).
+unsafe fn paint_ptt_hold_bar(
+    hdc: windows::Win32::Graphics::Gdi::HDC,
+    inner: windows::Win32::Foundation::RECT,
+    arm_start_ms: u64,
+) {
+    use windows::Win32::Foundation::RECT;
+
+    let frac = ptt_hold_fraction(arm_start_ms, GetTickCount64());
+    let inner_w = inner.right - inner.left;
+    let fill_w = ((inner_w as f32 - 4.0) * frac).max(0.0) as i32;
+    if fill_w <= 0 {
+        return;
     }
+    let bar_h = 3;
+    let (r, g, b) = lerp_rgb((168, 98, 178), (210, 120, 185), frac);
+    let brush = CreateSolidBrush(colorref(r, g, b));
+    let bar = RECT {
+        left: inner.left + 2,
+        top: inner.bottom - bar_h - 1,
+        right: inner.left + 2 + fill_w,
+        bottom: inner.bottom - 1,
+    };
+    let _ = FillRect(hdc, &bar, brush);
+    let _ = DeleteObject(brush);
 }
 
 fn lerp_rgb(a: (u8, u8, u8), b: (u8, u8, u8), t: f32) -> (u8, u8, u8) {
@@ -533,7 +571,7 @@ unsafe fn paint_gloss(hdc: windows::Win32::Graphics::Gdi::HDC, inner: windows::W
 unsafe fn paint_volume_bars(
     hdc: windows::Win32::Graphics::Gdi::HDC,
     inner: windows::Win32::Foundation::RECT,
-    mode: OverlayMode,
+    phase: UiPhase,
     meter: &AudioLevelMeter,
 ) {
     let bar_brush = CreateSolidBrush(colorref(210, 120, 185));
@@ -547,7 +585,7 @@ unsafe fn paint_volume_bars(
     let center_y = (inner.top + inner.bottom) / 2;
     let max_half = ((inner.bottom - inner.top) / 2 - 2).max(3);
 
-    let levels = if mode == OverlayMode::Recording {
+    let levels = if matches!(phase, UiPhase::RecordingPtt | UiPhase::RecordingHandsFree) {
         meter.bar_levels()
     } else {
         // Processing: gentle decay of last captured levels.

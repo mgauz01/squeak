@@ -2,18 +2,25 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
 
-use crossbeam_channel::Sender;
+use crossbeam_channel::{Receiver, RecvTimeoutError, Sender};
 use muda::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 use tracing::info;
-use tray_icon::{Icon, TrayIconBuilder};
+use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 
 use crate::app::{AppEvent, UserAction};
 use crate::config::{AsrModelId, GrammarModelId};
+use crate::ui_visual::{tray_icon_rgba, tray_icon_state, TrayIconState, UiPhase};
 
 use windows::Win32::UI::WindowsAndMessaging::MSG;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrayCommand {
+    SetPhase(UiPhase),
+}
+
 pub fn spawn(
     event_tx: Sender<AppEvent>,
+    status_rx: Receiver<TrayCommand>,
     running: Arc<AtomicBool>,
     initial_model: AsrModelId,
     grammar_enabled: bool,
@@ -24,6 +31,7 @@ pub fn spawn(
         .spawn(move || {
             if let Err(err) = run_tray(
                 event_tx,
+                status_rx,
                 running,
                 initial_model,
                 grammar_enabled,
@@ -36,34 +44,13 @@ pub fn spawn(
     Ok(())
 }
 
-fn build_tray_icon() -> Result<Icon, Box<dyn std::error::Error>> {
+pub fn set_phase(tx: &Sender<TrayCommand>, phase: UiPhase) {
+    let _ = tx.send(TrayCommand::SetPhase(phase));
+}
+
+fn build_tray_icon(state: TrayIconState) -> Result<Icon, Box<dyn std::error::Error>> {
     let size = 16u32;
-    let mut rgba = vec![0u8; (size * size * 4) as usize];
-    let center = 7.5f32;
-    let outer = 7.0f32;
-    let inner = 4.5f32;
-
-    for y in 0..size {
-        for x in 0..size {
-            let dx = x as f32 + 0.5 - center;
-            let dy = y as f32 + 0.5 - center;
-            let dist = (dx * dx + dy * dy).sqrt();
-            let i = ((y * size + x) * 4) as usize;
-            if dist <= outer {
-                rgba[i] = 0xFF;
-                rgba[i + 1] = 0xA0;
-                rgba[i + 2] = 0x20;
-                rgba[i + 3] = 0xFF;
-            }
-            if dist <= inner {
-                rgba[i] = 0x20;
-                rgba[i + 1] = 0x20;
-                rgba[i + 2] = 0x20;
-                rgba[i + 3] = 0xFF;
-            }
-        }
-    }
-
+    let rgba = tray_icon_rgba(state, size);
     Ok(Icon::from_rgba(rgba, size, size)?)
 }
 
@@ -99,12 +86,14 @@ fn append_grammar_item(
 
 fn run_tray(
     event_tx: Sender<AppEvent>,
+    status_rx: Receiver<TrayCommand>,
     running: Arc<AtomicBool>,
     initial_model: AsrModelId,
     grammar_enabled: bool,
     grammar_model: GrammarModelId,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let icon = build_tray_icon()?;
+    let mut tray_icon_state = TrayIconState::Idle;
+    let icon = build_tray_icon(tray_icon_state)?;
 
     let exit_item = MenuItem::new("Exit", true, None);
     let exit_id = exit_item.id().clone();
@@ -147,7 +136,7 @@ fn run_tray(
     let mut grammar_ids: Vec<(muda::MenuId, String)> = Vec::new();
     #[cfg(not(any(feature = "gec-tiny", feature = "gec-coedit", feature = "gec-llama")))]
     let grammar_ids: Vec<(muda::MenuId, String)> = Vec::new();
-    #[cfg(any(feature = "gec-tiny", feature = "gec-coedit", feature = "gec-llama"))]
+    #[cfg(any(feature = "gec-tiny", feature = "gec-coedit", feature = "gec-llama")))]
     let grammar_menu = {
         let grammar_menu = Submenu::new("Grammar correction (experimental)", true);
         append_grammar_item(
@@ -185,7 +174,7 @@ fn run_tray(
 
         dispatch_pending_messages(&mut msg);
 
-        let _tray = TrayIconBuilder::new()
+        let mut tray: TrayIcon = TrayIconBuilder::new()
             .with_menu(Box::new(menu))
             .with_tooltip("Squeak — voice dictation (tray: Speech model for accuracy)")
             .with_icon(icon)
@@ -218,7 +207,7 @@ fn run_tray(
 
         info!("Tray icon ready");
         eprintln!(
-            "Squeak is in the system tray (orange ring). Dictation shows a pill at the top of the screen."
+            "Squeak is in the system tray (purple pill icon). Dictation shows a pill at the top of the screen."
         );
         eprintln!(
             "Speech model: {} (default Small). Use tray → Speech model to change.",
@@ -227,7 +216,20 @@ fn run_tray(
 
         while running.load(Ordering::Relaxed) {
             dispatch_pending_messages(&mut msg);
-            thread::sleep(std::time::Duration::from_millis(10));
+
+            match status_rx.recv_timeout(std::time::Duration::from_millis(10)) {
+                Ok(TrayCommand::SetPhase(phase)) => {
+                    let next = tray_icon_state(phase);
+                    if next != tray_icon_state {
+                        tray_icon_state = next;
+                        if let Ok(icon) = build_tray_icon(tray_icon_state) {
+                            let _ = tray.set_icon(Some(icon));
+                        }
+                    }
+                }
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => break,
+            }
         }
     }
 

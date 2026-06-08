@@ -22,6 +22,7 @@ use crate::platform::win::focus::FocusTarget;
 use crate::platform::win::process::foreground_process_name;
 use crate::postprocess::{self, GrammarWorker, InputContext, PostProcessOptions};
 use crate::ui::{overlay, tray};
+use crate::ui_visual::ui_phase;
 
 pub struct AppRuntime {
     state: StateMachine,
@@ -33,8 +34,10 @@ pub struct AppRuntime {
     delivery: DeliveryChain,
     running: Arc<AtomicBool>,
     overlay_tx: crossbeam_channel::Sender<overlay::OverlayCommand>,
+    tray_tx: crossbeam_channel::Sender<tray::TrayCommand>,
     event_tx: crossbeam_channel::Sender<AppEvent>,
     audio_meter: Arc<AudioLevelMeter>,
+    mic_armed: bool,
     injection_target: Option<FocusTarget>,
     _single_instance: SingleInstance,
 }
@@ -49,6 +52,7 @@ impl AppRuntime {
 
         let (event_tx, events) = crossbeam_channel::unbounded();
         let (overlay_tx, overlay_rx) = crossbeam_channel::unbounded();
+        let (tray_tx, tray_rx) = crossbeam_channel::unbounded();
         let audio_meter = AudioLevelMeter::new();
         let running = Arc::new(AtomicBool::new(true));
 
@@ -56,6 +60,7 @@ impl AppRuntime {
         hotkeys::spawn_hotkeys(event_tx.clone());
         tray::spawn(
             event_tx.clone(),
+            tray_rx,
             Arc::clone(&running),
             config.asr_model(),
             config.grammar_enabled(),
@@ -73,8 +78,10 @@ impl AppRuntime {
             delivery,
             running,
             overlay_tx,
+            tray_tx,
             event_tx,
             audio_meter,
+            mic_armed: false,
             injection_target: None,
             _single_instance: single_instance,
         })
@@ -90,7 +97,7 @@ impl AppRuntime {
                 .preload_in_background(self.config.grammar_model());
         }
 
-        eprintln!("Hold Win+Ctrl to dictate. Shift+Alt+Z pastes last transcript. Orange circle in the taskbar = Squeak running.");
+        eprintln!("Hold Win+Ctrl to dictate. Shift+Alt+Z pastes last transcript. Purple pill in the taskbar = Squeak running.");
         let model = self.config.asr_model();
         eprintln!(
             "Using {} on {} — tray → Speech model to change.",
@@ -126,7 +133,7 @@ impl AppRuntime {
     fn handle_event(&mut self, event: AppEvent) -> Result<(), RuntimeError> {
         if matches!(event, AppEvent::UserAction(UserAction::Exit)) {
             self.running.store(false, Ordering::Relaxed);
-            overlay::sync(&self.overlay_tx, self.state.state());
+            self.sync_ui();
             return Ok(());
         }
 
@@ -161,7 +168,7 @@ impl AppRuntime {
 
         let prev = self.state.state();
         let next = self.state.apply(event).map_err(RuntimeError::State)?;
-        overlay::sync(&self.overlay_tx, next);
+        self.sync_ui();
 
         match (prev, next) {
             (_, AppState::RecordingPtt | AppState::RecordingHandsFree) => {
@@ -280,8 +287,14 @@ impl AppRuntime {
         }
     }
 
+    fn sync_ui(&self) {
+        let phase = ui_phase(self.state.state(), self.mic_armed);
+        overlay::set_phase(&self.overlay_tx, phase);
+        tray::set_phase(&self.tray_tx, phase);
+    }
+
     fn arm_recording(&mut self) -> Result<(), RuntimeError> {
-        overlay::set_mode(&self.overlay_tx, overlay::OverlayMode::Recording);
+        self.mic_armed = true;
 
         if self.injection_target.is_none() {
             self.injection_target = FocusTarget::capture();
@@ -294,6 +307,7 @@ impl AppRuntime {
             .map_err(RuntimeError::Audio)?;
         self.asr
             .preload_in_background(self.config.asr_model(), Some(self.event_tx.clone()));
+        self.sync_ui();
         if self.asr.is_ready(self.config.asr_model()) {
             overlay::signal_asr_ready(&self.overlay_tx);
         }
@@ -311,7 +325,8 @@ impl AppRuntime {
             audio.disarm();
         }
         self.injection_target = None;
-        overlay::set_mode(&self.overlay_tx, overlay::OverlayMode::Hidden);
+        self.mic_armed = false;
+        self.sync_ui();
         Ok(())
     }
 
@@ -459,7 +474,7 @@ impl AppRuntime {
         self.state
             .apply(AppEvent::DeliveryComplete)
             .map_err(RuntimeError::State)?;
-        overlay::sync(&self.overlay_tx, self.state.state());
+        self.sync_ui();
         match outcome {
             DeliveryOutcome::Injected | DeliveryOutcome::PastedViaClipboard => {
                 eprintln!(
@@ -484,7 +499,7 @@ impl AppRuntime {
         self.state
             .apply(AppEvent::DismissError)
             .map_err(RuntimeError::State)?;
-        overlay::sync(&self.overlay_tx, self.state.state());
+        self.sync_ui();
         Ok(())
     }
 }
