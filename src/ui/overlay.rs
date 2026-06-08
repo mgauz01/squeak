@@ -19,18 +19,17 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DispatchMessageW, GetSystemMetrics, GetWindowLongPtrW,
     PeekMessageW, RegisterClassW, SetTimer, SetWindowLongPtrW, SetWindowPos, ShowWindow,
     TranslateMessage, GWLP_USERDATA, HWND_TOPMOST, MSG, PM_REMOVE, SM_CXSCREEN, SWP_NOACTIVATE,
-    SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SW_HIDE, SW_SHOW, WM_DESTROY, WM_ERASEBKGND,
+    SWP_SHOWWINDOW, SW_HIDE, SW_SHOW, WM_DESTROY, WM_ERASEBKGND,
     WM_PAINT, WM_TIMER, WNDCLASSW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
 use crate::app::AppState;
 use crate::audio::AudioLevelMeter;
+use crate::overlay_grow::{
+    display_width, recording_width_fraction, OVERLAY_HEIGHT, OVERLAY_WIDTH, PILL_CORNER,
+    PILL_MIN_WIDTH,
+};
 
-/// Capsule pill — 25% smaller than the original 168×44 indicator.
-const OVERLAY_WIDTH: i32 = 126;
-const OVERLAY_HEIGHT: i32 = 33;
-/// True pill ends: semicircle radius = half height.
-const PILL_RADIUS: i32 = OVERLAY_HEIGHT / 2;
 const PILL_INSET: i32 = 5;
 const OVERLAY_TOP_MARGIN: i32 = 16;
 const ANIM_TIMER_ID: usize = 1;
@@ -44,13 +43,25 @@ pub enum OverlayMode {
     Processing = 2,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OverlayCommand {
+    SetMode(OverlayMode),
+    AsrReady,
+}
+
 struct OverlayWindowState {
     mode: OverlayMode,
     meter: Arc<AudioLevelMeter>,
+    anchor_center_x: i32,
+    anchor_y: i32,
+    grow_start_ms: u64,
+    asr_ready: bool,
+    asr_ready_ms: Option<u64>,
+    current_width: i32,
 }
 
 pub fn spawn(
-    cmd_rx: Receiver<OverlayMode>,
+    cmd_rx: Receiver<OverlayCommand>,
     running: Arc<AtomicBool>,
     meter: Arc<AudioLevelMeter>,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -65,7 +76,7 @@ pub fn spawn(
     Ok(())
 }
 
-pub fn sync(tx: &Sender<OverlayMode>, state: AppState) {
+pub fn sync(tx: &Sender<OverlayCommand>, state: AppState) {
     let mode = match state {
         AppState::RecordingPtt | AppState::RecordingHandsFree => OverlayMode::Recording,
         AppState::Processing | AppState::Injecting => OverlayMode::Processing,
@@ -75,12 +86,17 @@ pub fn sync(tx: &Sender<OverlayMode>, state: AppState) {
 }
 
 /// Push an overlay mode directly (e.g. show pill as soon as Win+Ctrl is pressed).
-pub fn set_mode(tx: &Sender<OverlayMode>, mode: OverlayMode) {
-    let _ = tx.send(mode);
+pub fn set_mode(tx: &Sender<OverlayCommand>, mode: OverlayMode) {
+    let _ = tx.send(OverlayCommand::SetMode(mode));
+}
+
+/// ASR finished loading — complete the horizontal grow-in animation.
+pub fn signal_asr_ready(tx: &Sender<OverlayCommand>) {
+    let _ = tx.send(OverlayCommand::AsrReady);
 }
 
 unsafe fn run_overlay(
-    cmd_rx: Receiver<OverlayMode>,
+    cmd_rx: Receiver<OverlayCommand>,
     running: Arc<AtomicBool>,
     meter: Arc<AudioLevelMeter>,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -92,15 +108,15 @@ unsafe fn run_overlay(
     };
     RegisterClassW(&wc);
 
-    let (x, y) = primary_monitor_top_center();
+    let (anchor_center_x, anchor_y) = primary_monitor_anchor();
     let hwnd = CreateWindowExW(
         WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
         PCWSTR(class_name.as_ptr()),
         PCWSTR::null(),
         WS_POPUP,
-        x,
-        y,
-        OVERLAY_WIDTH,
+        anchor_center_x - PILL_MIN_WIDTH / 2,
+        anchor_y,
+        PILL_MIN_WIDTH,
         OVERLAY_HEIGHT,
         HWND::default(),
         None,
@@ -111,10 +127,16 @@ unsafe fn run_overlay(
     let state = Box::new(OverlayWindowState {
         mode: OverlayMode::Hidden,
         meter,
+        anchor_center_x,
+        anchor_y,
+        grow_start_ms: 0,
+        asr_ready: false,
+        asr_ready_ms: None,
+        current_width: PILL_MIN_WIDTH,
     });
     SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(state) as isize);
 
-    apply_pill_window_shape(hwnd);
+    apply_pill_window_shape(hwnd, PILL_MIN_WIDTH);
 
     let _ = ShowWindow(hwnd, SW_HIDE);
     if SetTimer(hwnd, ANIM_TIMER_ID, ANIM_MS, None) == 0 {
@@ -136,7 +158,8 @@ unsafe fn run_overlay(
         }
 
         match cmd_rx.recv_timeout(std::time::Duration::from_millis(16)) {
-            Ok(mode) => apply_overlay_mode(hwnd, mode),
+            Ok(OverlayCommand::SetMode(mode)) => apply_overlay_mode(hwnd, mode),
+            Ok(OverlayCommand::AsrReady) => apply_asr_ready(hwnd),
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => break,
         }
@@ -146,48 +169,97 @@ unsafe fn run_overlay(
     Ok(())
 }
 
-unsafe fn apply_pill_window_shape(hwnd: HWND) {
-    let rgn = CreateRoundRectRgn(
-        0,
-        0,
-        OVERLAY_WIDTH,
-        OVERLAY_HEIGHT,
-        PILL_RADIUS,
-        PILL_RADIUS,
-    );
+fn pill_corner_for_width(width: i32) -> i32 {
+    PILL_CORNER.min(width.max(1))
+}
+
+unsafe fn apply_pill_window_shape(hwnd: HWND, width: i32) {
+    let corner = pill_corner_for_width(width);
+    let rgn = CreateRoundRectRgn(0, 0, width, OVERLAY_HEIGHT, corner, corner);
     let _ = SetWindowRgn(hwnd, rgn, BOOL::from(true));
 }
 
-unsafe fn apply_overlay_mode(hwnd: HWND, mode: OverlayMode) {
-    if let Some(state) = overlay_state_mut(hwnd) {
-        if state.mode == mode {
-            return;
+unsafe fn update_pill_geometry(hwnd: HWND, state: &mut OverlayWindowState) {
+    let width = match state.mode {
+        OverlayMode::Hidden => return,
+        OverlayMode::Processing => OVERLAY_WIDTH,
+        OverlayMode::Recording => {
+            let now = GetTickCount64();
+            let frac = recording_width_fraction(
+                state.grow_start_ms,
+                now,
+                state.asr_ready,
+                state.asr_ready_ms,
+            );
+            display_width(frac)
         }
-        state.mode = mode;
-    } else {
+    };
+
+    if width != state.current_width {
+        state.current_width = width;
+        let x = state.anchor_center_x - width / 2;
+        let _ = SetWindowPos(
+            hwnd,
+            HWND_TOPMOST,
+            x,
+            state.anchor_y,
+            width,
+            OVERLAY_HEIGHT,
+            SWP_NOACTIVATE | SWP_SHOWWINDOW,
+        );
+        apply_pill_window_shape(hwnd, width);
+    }
+}
+
+unsafe fn reset_recording_grow(state: &mut OverlayWindowState) {
+    state.grow_start_ms = GetTickCount64();
+    state.asr_ready = false;
+    state.asr_ready_ms = None;
+    state.current_width = PILL_MIN_WIDTH;
+}
+
+unsafe fn apply_overlay_mode(hwnd: HWND, mode: OverlayMode) {
+    let Some(state) = overlay_state_mut(hwnd) else {
+        return;
+    };
+    if state.mode == mode {
         return;
     }
+    state.mode = mode;
+
     match mode {
         OverlayMode::Hidden => {
             let _ = ShowWindow(hwnd, SW_HIDE);
         }
-        OverlayMode::Recording | OverlayMode::Processing => {
+        OverlayMode::Recording => {
+            reset_recording_grow(state);
             let _ = ShowWindow(hwnd, SW_SHOW);
-            let _ = SetWindowPos(
-                hwnd,
-                HWND_TOPMOST,
-                0,
-                0,
-                0,
-                0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
-            );
+            update_pill_geometry(hwnd, state);
+            let _ = InvalidateRect(hwnd, None, false);
+        }
+        OverlayMode::Processing => {
+            state.current_width = OVERLAY_WIDTH;
+            let _ = ShowWindow(hwnd, SW_SHOW);
+            update_pill_geometry(hwnd, state);
             let _ = InvalidateRect(hwnd, None, false);
         }
     }
 }
 
-unsafe fn primary_monitor_top_center() -> (i32, i32) {
+unsafe fn apply_asr_ready(hwnd: HWND) {
+    let Some(state) = overlay_state_mut(hwnd) else {
+        return;
+    };
+    if state.mode != OverlayMode::Recording || state.asr_ready {
+        return;
+    }
+    state.asr_ready = true;
+    state.asr_ready_ms = Some(GetTickCount64());
+    update_pill_geometry(hwnd, state);
+    let _ = InvalidateRect(hwnd, None, false);
+}
+
+unsafe fn primary_monitor_anchor() -> (i32, i32) {
     let pt = POINT { x: 0, y: 0 };
     let monitor = MonitorFromPoint(pt, MONITOR_DEFAULTTOPRIMARY);
     let mut info = MONITORINFO {
@@ -196,13 +268,13 @@ unsafe fn primary_monitor_top_center() -> (i32, i32) {
     };
     if GetMonitorInfoW(monitor, &mut info).0 != 0 {
         let work = info.rcWork;
-        let x = work.left + (work.right - work.left - OVERLAY_WIDTH) / 2;
+        let center_x = work.left + (work.right - work.left) / 2;
         let y = work.top + OVERLAY_TOP_MARGIN;
-        return (x, y);
+        return (center_x, y);
     }
 
     let screen_w = GetSystemMetrics(SM_CXSCREEN);
-    ((screen_w - OVERLAY_WIDTH) / 2, OVERLAY_TOP_MARGIN)
+    (screen_w / 2, OVERLAY_TOP_MARGIN)
 }
 
 unsafe fn overlay_state_mut(hwnd: HWND) -> Option<&'static mut OverlayWindowState> {
@@ -234,17 +306,20 @@ unsafe extern "system" fn overlay_wnd_proc(
             let mut ps = PAINTSTRUCT::default();
             let hdc = BeginPaint(hwnd, &mut ps);
             if !hdc.is_invalid() {
+                let width = overlay_state_mut(hwnd)
+                    .map(|s| s.current_width)
+                    .unwrap_or(PILL_MIN_WIDTH);
                 let mem_dc = CreateCompatibleDC(hdc);
                 if !mem_dc.is_invalid() {
-                    let bitmap = CreateCompatibleBitmap(hdc, OVERLAY_WIDTH, OVERLAY_HEIGHT);
+                    let bitmap = CreateCompatibleBitmap(hdc, width, OVERLAY_HEIGHT);
                     if !bitmap.is_invalid() {
                         let old_bitmap = SelectObject(mem_dc, bitmap);
-                        paint_overlay(hwnd, mem_dc);
+                        paint_overlay(hwnd, mem_dc, width);
                         let _ = BitBlt(
                             hdc,
                             0,
                             0,
-                            OVERLAY_WIDTH,
+                            width,
                             OVERLAY_HEIGHT,
                             mem_dc,
                             0,
@@ -262,6 +337,9 @@ unsafe extern "system" fn overlay_wnd_proc(
         }
         WM_TIMER if wparam.0 == ANIM_TIMER_ID => {
             if let Some(state) = overlay_state_mut(hwnd) {
+                if state.mode == OverlayMode::Recording {
+                    update_pill_geometry(hwnd, state);
+                }
                 if state.mode != OverlayMode::Hidden {
                     let _ = InvalidateRect(hwnd, None, false);
                 }
@@ -276,29 +354,29 @@ unsafe extern "system" fn overlay_wnd_proc(
     }
 }
 
-fn outer_pill_rect() -> windows::Win32::Foundation::RECT {
+fn outer_pill_rect(width: i32) -> windows::Win32::Foundation::RECT {
     windows::Win32::Foundation::RECT {
         left: 0,
         top: 0,
-        right: OVERLAY_WIDTH,
+        right: width,
         bottom: OVERLAY_HEIGHT,
     }
 }
 
-fn inner_pill_rect() -> windows::Win32::Foundation::RECT {
+fn inner_pill_rect(width: i32) -> windows::Win32::Foundation::RECT {
     windows::Win32::Foundation::RECT {
         left: PILL_INSET,
         top: PILL_INSET,
-        right: OVERLAY_WIDTH - PILL_INSET,
+        right: width - PILL_INSET,
         bottom: OVERLAY_HEIGHT - PILL_INSET,
     }
 }
 
-fn inner_pill_radius() -> i32 {
-    (PILL_RADIUS - PILL_INSET).max(4)
+fn inner_pill_radius(width: i32) -> i32 {
+    (pill_corner_for_width(width) - PILL_INSET).max(4)
 }
 
-unsafe fn paint_overlay(hwnd: HWND, hdc: windows::Win32::Graphics::Gdi::HDC) {
+unsafe fn paint_overlay(hwnd: HWND, hdc: windows::Win32::Graphics::Gdi::HDC, width: i32) {
     use windows::Win32::Foundation::RECT;
 
     let Some(state) = overlay_state_mut(hwnd) else {
@@ -309,17 +387,18 @@ unsafe fn paint_overlay(hwnd: HWND, hdc: windows::Win32::Graphics::Gdi::HDC) {
     }
 
     let tick_s = GetTickCount64() as f64 / 1000.0;
-    let outer = outer_pill_rect();
-    let inner = inner_pill_rect();
-    let inner_r = inner_pill_radius();
+    let outer = outer_pill_rect(width);
+    let inner = inner_pill_rect(width);
+    let outer_corner = pill_corner_for_width(width);
+    let inner_r = inner_pill_radius(width);
 
     let outer_clip = CreateRoundRectRgn(
         outer.left,
         outer.top,
         outer.right,
         outer.bottom,
-        PILL_RADIUS,
-        PILL_RADIUS,
+        outer_corner,
+        outer_corner,
     );
     let _ = SelectClipRgn(hdc, outer_clip);
 

@@ -4,6 +4,7 @@ pub mod app;
 pub mod asr;
 pub mod config;
 pub mod hotkeys;
+pub mod overlay_grow;
 pub mod postprocess;
 
 #[cfg(windows)]

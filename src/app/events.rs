@@ -42,4 +42,6 @@ pub enum AppEvent {
     DismissError,
     UserAction(UserAction),
     SecondInstanceWake,
+    /// ASR worker finished loading the speech model (overlay grow animation).
+    AsrModelReady,
 }

@@ -32,7 +32,8 @@ pub struct AppRuntime {
     audio: Option<AudioCapture>,
     delivery: DeliveryChain,
     running: Arc<AtomicBool>,
-    overlay_tx: crossbeam_channel::Sender<overlay::OverlayMode>,
+    overlay_tx: crossbeam_channel::Sender<overlay::OverlayCommand>,
+    event_tx: crossbeam_channel::Sender<AppEvent>,
     audio_meter: Arc<AudioLevelMeter>,
     injection_target: Option<FocusTarget>,
     _single_instance: SingleInstance,
@@ -72,6 +73,7 @@ impl AppRuntime {
             delivery,
             running,
             overlay_tx,
+            event_tx,
             audio_meter,
             injection_target: None,
             _single_instance: single_instance,
@@ -81,7 +83,8 @@ impl AppRuntime {
     pub fn run(mut self) -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("Loading speech model in background (first launch may take a minute)...");
         self.warm_audio_capture();
-        self.asr.preload_in_background(self.config.asr_model());
+        self.asr
+            .preload_in_background(self.config.asr_model(), Some(self.event_tx.clone()));
         if self.config.grammar_enabled() {
             self.grammar
                 .preload_in_background(self.config.grammar_model());
@@ -151,6 +154,11 @@ impl AppRuntime {
             return self.disarm_recording();
         }
 
+        if matches!(event, AppEvent::AsrModelReady) {
+            overlay::signal_asr_ready(&self.overlay_tx);
+            return Ok(());
+        }
+
         let prev = self.state.state();
         let next = self.state.apply(event).map_err(RuntimeError::State)?;
         overlay::sync(&self.overlay_tx, next);
@@ -196,7 +204,8 @@ impl AppRuntime {
         self.asr
             .reload(model)
             .map_err(|e| RuntimeError::Message(e.to_string()))?;
-        self.asr.preload_in_background(model);
+        self.asr
+            .preload_in_background(model, Some(self.event_tx.clone()));
         eprintln!(
             "Speech model set to {}. Download/load may take a minute on first use.",
             model.tray_summary()
@@ -283,7 +292,11 @@ impl AppRuntime {
             .ok_or(RuntimeError::Message("microphone not available".into()))?
             .start()
             .map_err(RuntimeError::Audio)?;
-        self.asr.preload_in_background(self.config.asr_model());
+        self.asr
+            .preload_in_background(self.config.asr_model(), Some(self.event_tx.clone()));
+        if self.asr.is_ready(self.config.asr_model()) {
+            overlay::signal_asr_ready(&self.overlay_tx);
+        }
         Ok(())
     }
 

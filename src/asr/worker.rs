@@ -9,6 +9,7 @@ use crate::asr::engine::{AsrEngine, AsrError};
 use crate::asr::factory::create_engine;
 use crate::asr::provision::{ensure_model, DownloadProgress};
 use crate::asr::moonshine::{configure_ort_accelerator_for_model, is_likely_directml_inference_error};
+use crate::app::AppEvent;
 use crate::config::AsrModelId;
 
 enum WorkerCommand {
@@ -59,8 +60,15 @@ impl AsrWorker {
         self.downloading.load(Ordering::Relaxed)
     }
 
-    pub fn preload_in_background(&self, model: AsrModelId) {
+    pub fn preload_in_background(
+        &self,
+        model: AsrModelId,
+        notify: Option<Sender<AppEvent>>,
+    ) {
         if self.is_ready(model) {
+            if let Some(tx) = notify {
+                let _ = tx.send(AppEvent::AsrModelReady);
+            }
             return;
         }
         let (reply_tx, reply_rx) = crossbeam_channel::bounded(1);
@@ -78,7 +86,12 @@ impl AsrWorker {
             .name("squeak-asr-preload".into())
             .spawn(move || {
                 match reply_rx.recv() {
-                    Ok(Ok(())) => eprintln!("Speech model ready."),
+                    Ok(Ok(())) => {
+                        eprintln!("Speech model ready.");
+                        if let Some(tx) = notify {
+                            let _ = tx.send(AppEvent::AsrModelReady);
+                        }
+                    }
                     Ok(Err(err)) => eprintln!("Speech model load failed: {err}"),
                     Err(_) => eprintln!("Speech model load interrupted."),
                 }
