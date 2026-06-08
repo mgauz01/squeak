@@ -7,20 +7,22 @@ use std::thread;
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender};
 use tracing::info;
 use windows::core::PCWSTR;
-use windows::Win32::Foundation::{BOOL, COLORREF, HWND, LPARAM, LRESULT, POINT, WPARAM};
+use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateRoundRectRgn,
-    CreateSolidBrush, DeleteDC, DeleteObject, EndPaint, FillRect, GetMonitorInfoW, HRGN,
-    InvalidateRect, MonitorFromPoint, RoundRect, SelectClipRgn, SelectObject, SetWindowRgn,
-    MONITORINFO, MONITOR_DEFAULTTOPRIMARY, PAINTSTRUCT, SRCCOPY,
+    BeginPaint, CreateCompatibleDC, CreateDIBSection, CreateRoundRectRgn, CreateSolidBrush,
+    DeleteDC, DeleteObject, EndPaint, FillRect, GetDC, GetMonitorInfoW, HRGN, InvalidateRect,
+    MonitorFromPoint, ReleaseDC, RoundRect, SelectClipRgn, SelectObject, AC_SRC_ALPHA, AC_SRC_OVER,
+    BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BLENDFUNCTION, DIB_RGB_COLORS, MONITORINFO,
+    MONITOR_DEFAULTTOPRIMARY, PAINTSTRUCT,
 };
 use windows::Win32::System::SystemInformation::GetTickCount64;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DispatchMessageW, GetSystemMetrics, GetWindowLongPtrW,
-    PeekMessageW, RegisterClassW, SetTimer, SetWindowLongPtrW, SetWindowPos, ShowWindow,
-    TranslateMessage, GWLP_USERDATA, HWND_TOPMOST, MSG, PM_REMOVE, SM_CXSCREEN, SWP_NOACTIVATE,
-    SWP_SHOWWINDOW, SW_HIDE, SW_SHOW, WM_DESTROY, WM_ERASEBKGND,
-    WM_PAINT, WM_TIMER, WNDCLASSW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    GetWindowRect, PeekMessageW, RegisterClassW, SetTimer, SetWindowLongPtrW, SetWindowPos,
+    ShowWindow, TranslateMessage, UpdateLayeredWindow, GWLP_USERDATA, HWND_TOPMOST, MSG,
+    PM_REMOVE, SM_CXSCREEN, SWP_NOACTIVATE, SWP_SHOWWINDOW, ULW_ALPHA, WM_DESTROY,
+    WM_ERASEBKGND, WM_PAINT, WM_TIMER, WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
+    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
 use crate::app::AppState;
@@ -29,6 +31,7 @@ use crate::overlay_grow::{
     animated_scale, display_width, recording_width_fraction, scaled_dimension, OVERLAY_HEIGHT,
     OVERLAY_WIDTH, PILL_CORNER, PILL_MIN_WIDTH,
 };
+use crate::overlay_raster::apply_pill_alpha_mask;
 use crate::ui_visual::{
     phase_display_scale, phase_uses_grow_animation, ptt_hold_fraction, ui_phase, UiPhase,
 };
@@ -105,7 +108,7 @@ unsafe fn run_overlay(
 
     let (anchor_center_x, anchor_y) = primary_monitor_anchor();
     let hwnd = CreateWindowExW(
-        WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+        WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
         PCWSTR(class_name.as_ptr()),
         PCWSTR::null(),
         WS_POPUP,
@@ -134,8 +137,6 @@ unsafe fn run_overlay(
         current_height: OVERLAY_HEIGHT,
     });
     SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(state) as isize);
-
-    apply_pill_window_shape(hwnd, PILL_MIN_WIDTH, OVERLAY_HEIGHT);
 
     let _ = ShowWindow(hwnd, SW_HIDE);
     if SetTimer(hwnd, ANIM_TIMER_ID, ANIM_MS, None) == 0 {
@@ -170,12 +171,6 @@ unsafe fn run_overlay(
 
 fn pill_corner_for_size(width: i32, height: i32) -> i32 {
     PILL_CORNER.min(width.max(1)).min(height.max(1))
-}
-
-unsafe fn apply_pill_window_shape(hwnd: HWND, width: i32, height: i32) {
-    let corner = pill_corner_for_size(width, height);
-    let rgn = CreateRoundRectRgn(0, 0, width, height, corner, corner);
-    let _ = SetWindowRgn(hwnd, rgn, BOOL::from(true));
 }
 
 fn base_pill_width(state: &OverlayWindowState, now_ms: u64) -> i32 {
@@ -242,7 +237,7 @@ unsafe fn update_pill_geometry(hwnd: HWND, state: &mut OverlayWindowState) {
             height,
             SWP_NOACTIVATE | SWP_SHOWWINDOW,
         );
-        apply_pill_window_shape(hwnd, width, height);
+        let _ = InvalidateRect(hwnd, None, false);
     }
 }
 
@@ -342,35 +337,9 @@ unsafe extern "system" fn overlay_wnd_proc(
         WM_ERASEBKGND => LRESULT(1),
         WM_PAINT => {
             let mut ps = PAINTSTRUCT::default();
-            let hdc = BeginPaint(hwnd, &mut ps);
-            if !hdc.is_invalid() {
-                let (width, height) = overlay_state_mut(hwnd)
-                    .map(|s| (s.current_width, s.current_height))
-                    .unwrap_or((PILL_MIN_WIDTH, OVERLAY_HEIGHT));
-                let mem_dc = CreateCompatibleDC(hdc);
-                if !mem_dc.is_invalid() {
-                    let bitmap = CreateCompatibleBitmap(hdc, width, height);
-                    if !bitmap.is_invalid() {
-                        let old_bitmap = SelectObject(mem_dc, bitmap);
-                        paint_overlay(hwnd, mem_dc, width, height);
-                        let _ = BitBlt(
-                            hdc,
-                            0,
-                            0,
-                            width,
-                            height,
-                            mem_dc,
-                            0,
-                            0,
-                            SRCCOPY,
-                        );
-                        let _ = SelectObject(mem_dc, old_bitmap);
-                        let _ = DeleteObject(bitmap);
-                    }
-                    let _ = DeleteDC(mem_dc);
-                }
-                let _ = EndPaint(hwnd, &ps);
-            }
+            let _ = BeginPaint(hwnd, &mut ps);
+            present_layered_overlay(hwnd);
+            let _ = EndPaint(hwnd, &mut ps);
             LRESULT(0)
         }
         WM_TIMER if wparam.0 == ANIM_TIMER_ID => {
@@ -395,18 +364,108 @@ unsafe extern "system" fn overlay_wnd_proc(
     }
 }
 
+unsafe fn present_layered_overlay(hwnd: HWND) {
+    let (width, height) = match overlay_state_mut(hwnd) {
+        Some(state) if state.phase != UiPhase::Hidden => (state.current_width, state.current_height),
+        _ => return,
+    };
+    if width <= 0 || height <= 0 {
+        return;
+    }
+
+    let screen_dc = GetDC(HWND::default());
+    if screen_dc.is_invalid() {
+        return;
+    }
+
+    let mem_dc = CreateCompatibleDC(screen_dc);
+    if mem_dc.is_invalid() {
+        let _ = ReleaseDC(HWND::default(), screen_dc);
+        return;
+    }
+
+    let bmi = BITMAPINFO {
+        bmiHeader: BITMAPINFOHEADER {
+            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth: width,
+            biHeight: -height,
+            biPlanes: 1,
+            biBitCount: 32,
+            biCompression: BI_RGB.0,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    let mut bits: *mut std::ffi::c_void = std::ptr::null_mut();
+    let dib = match CreateDIBSection(mem_dc, &bmi, DIB_RGB_COLORS, &mut bits, None, 0) {
+        Ok(bitmap) => bitmap,
+        Err(_) => {
+            let _ = DeleteDC(mem_dc);
+            let _ = ReleaseDC(HWND::default(), screen_dc);
+            return;
+        }
+    };
+
+    let old_bitmap = SelectObject(mem_dc, dib);
+    if !bits.is_null() {
+        let byte_len = (width * height * 4) as usize;
+        std::ptr::write_bytes(bits.cast::<u8>(), 0, byte_len);
+    }
+
+    paint_overlay(hwnd, mem_dc, width, height);
+
+    if !bits.is_null() {
+        let pixels =
+            std::slice::from_raw_parts_mut(bits.cast::<u8>(), (width * height * 4) as usize);
+        apply_pill_alpha_mask(pixels, width, height);
+    }
+
+    let mut window_rect = RECT::default();
+    if GetWindowRect(hwnd, &mut window_rect).is_err() {
+        let _ = SelectObject(mem_dc, old_bitmap);
+        let _ = DeleteObject(dib);
+        let _ = DeleteDC(mem_dc);
+        let _ = ReleaseDC(HWND::default(), screen_dc);
+        return;
+    }
+
+    let pt_dst = POINT {
+        x: window_rect.left,
+        y: window_rect.top,
+    };
+    let pt_src = POINT { x: 0, y: 0 };
+    let size = SIZE {
+        cx: width,
+        cy: height,
+    };
+    let blend = BLENDFUNCTION {
+        BlendOp: AC_SRC_OVER as u8,
+        BlendFlags: 0,
+        SourceConstantAlpha: 255,
+        AlphaFormat: AC_SRC_ALPHA as u8,
+    };
+    let _ = UpdateLayeredWindow(
+        hwnd,
+        None,
+        Some(&pt_dst),
+        Some(&size),
+        mem_dc,
+        Some(&pt_src),
+        COLORREF(0),
+        Some(&blend),
+        ULW_ALPHA,
+    );
+
+    let _ = SelectObject(mem_dc, old_bitmap);
+    let _ = DeleteObject(dib);
+    let _ = DeleteDC(mem_dc);
+    let _ = ReleaseDC(HWND::default(), screen_dc);
+}
+
 fn pill_inset_for_height(height: i32) -> i32 {
     let inset = (PILL_INSET as f32 * (height as f32 / OVERLAY_HEIGHT as f32)).round() as i32;
     inset.clamp(2, height / 3)
-}
-
-fn outer_pill_rect(width: i32, height: i32) -> windows::Win32::Foundation::RECT {
-    windows::Win32::Foundation::RECT {
-        left: 0,
-        top: 0,
-        right: width,
-        bottom: height,
-    }
 }
 
 fn inner_pill_rect(width: i32, height: i32) -> windows::Win32::Foundation::RECT {
@@ -440,34 +499,22 @@ unsafe fn paint_overlay(
     }
 
     let tick_s = GetTickCount64() as f64 / 1000.0;
-    let outer = outer_pill_rect(width, height);
     let inner = inner_pill_rect(width, height);
-    let outer_corner = pill_corner_for_size(width, height);
     let inner_r = inner_pill_radius(width, height);
 
-    let outer_clip = CreateRoundRectRgn(
-        outer.left,
-        outer.top,
-        outer.right,
-        outer.bottom,
-        outer_corner,
-        outer_corner,
-    );
-    let _ = SelectClipRgn(hdc, outer_clip);
-
-    // Convex dome: lighter crown, darker base (no outline stroke).
+    // Convex dome: lighter crown, darker base. Silhouette AA is applied after paint.
     const SHELL_BANDS: i32 = 10;
     let band_h = (height + SHELL_BANDS - 1) / SHELL_BANDS;
     for band in 0..SHELL_BANDS {
-        let y0 = outer.top + band * band_h;
-        let y1 = (y0 + band_h).min(outer.bottom);
+        let y0 = band * band_h;
+        let y1 = (y0 + band_h).min(height);
         let t = band as f32 / (SHELL_BANDS - 1) as f32;
         let (r, g, b) = lerp_rgb((8, 0, 14), (72, 18, 88), 1.0 - t);
         let brush = CreateSolidBrush(colorref(r, g, b));
         let strip = RECT {
-            left: outer.left,
+            left: 0,
             top: y0,
-            right: outer.right,
+            right: width,
             bottom: y1,
         };
         let _ = FillRect(hdc, &strip, brush);
@@ -527,7 +574,6 @@ unsafe fn paint_overlay(
 
     let _ = SelectClipRgn(hdc, HRGN::default());
     let _ = DeleteObject(inner_clip);
-    let _ = DeleteObject(outer_clip);
 }
 
 /// Darker, inset plasma palette (purple → magenta → muted pink).
