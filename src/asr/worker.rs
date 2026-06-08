@@ -12,6 +12,10 @@ use crate::asr::moonshine::configure_ort_accelerator;
 use crate::config::AsrModelId;
 
 enum WorkerCommand {
+    IsReady {
+        model: AsrModelId,
+        reply: Sender<bool>,
+    },
     EnsureReady {
         model: AsrModelId,
         reply: Sender<Result<(), AsrError>>,
@@ -80,6 +84,21 @@ impl AsrWorker {
             .ok();
     }
 
+    pub fn is_ready(&self, model: AsrModelId) -> bool {
+        let (reply_tx, reply_rx) = crossbeam_channel::bounded(1);
+        if self
+            .tx
+            .send(WorkerCommand::IsReady {
+                model,
+                reply: reply_tx,
+            })
+            .is_err()
+        {
+            return false;
+        }
+        reply_rx.recv().unwrap_or(false)
+    }
+
     pub fn ensure_ready(&self, model: AsrModelId) -> Result<(), AsrError> {
         let (reply_tx, reply_rx) = crossbeam_channel::bounded(1);
         self.tx
@@ -128,6 +147,10 @@ fn worker_main(rx: Receiver<WorkerCommand>, downloading: Arc<AtomicBool>) {
 
     for cmd in rx {
         match cmd {
+            WorkerCommand::IsReady { model, reply } => {
+                let ready = state.loaded == Some(model) && state.engine.is_some();
+                let _ = reply.send(ready);
+            }
             WorkerCommand::EnsureReady { model, reply } => {
                 let result = ensure_ready(&mut state, model, &downloading);
                 let _ = reply.send(result);

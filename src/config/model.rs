@@ -37,9 +37,9 @@ impl ModelTier {
 
     pub fn menu_label(self) -> &'static str {
         match self {
-            Self::Tiny => "Tiny (fastest, ~12% WER)",
-            Self::Small => "Small (recommended, ~8% WER)",
-            Self::Medium => "Medium (best accuracy, ~7% WER)",
+            Self::Tiny => "Tiny (fast streaming, RTFx ~847)",
+            Self::Small => "Small (balanced streaming, RTFx ~566)",
+            Self::Medium => "Medium (best Moonshine accuracy, RTFx ~448)",
         }
     }
 
@@ -67,6 +67,11 @@ pub enum AsrModelId {
 
 impl Default for AsrModelId {
     fn default() -> Self {
+        #[cfg(feature = "parakeet")]
+        {
+            return Self::Parakeet;
+        }
+        #[cfg(not(feature = "parakeet"))]
         Self::Moonshine(ModelTier::default())
     }
 }
@@ -112,7 +117,7 @@ impl AsrModelId {
         match self {
             Self::Moonshine(tier) => tier.menu_label(),
             #[cfg(feature = "parakeet")]
-            Self::Parakeet => "Parakeet (efficient, ~6% WER)",
+            Self::Parakeet => "Parakeet (fastest batch, RTFx ~3333, ~6% WER)",
             #[cfg(feature = "cohere")]
             Self::Cohere => "Cohere (maximum accuracy, ~5% WER)",
             #[cfg(feature = "canary")]
@@ -310,6 +315,9 @@ mod tests {
     #[test]
     fn default_config_values() {
         let cfg = Config::default();
+        #[cfg(feature = "parakeet")]
+        assert_eq!(cfg.asr_model(), AsrModelId::Parakeet);
+        #[cfg(not(feature = "parakeet"))]
         assert_eq!(cfg.asr_model(), AsrModelId::moonshine(ModelTier::Small));
         assert!(!cfg.grammar_enabled());
         assert_eq!(cfg.grammar_model(), GrammarModelId::Tiny);

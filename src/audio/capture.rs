@@ -1,4 +1,5 @@
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use thiserror::Error;
@@ -128,7 +129,12 @@ impl AudioCapture {
     }
 
     pub fn stop(&mut self) -> Result<Vec<f32>, AudioError> {
-        self.stream = None;
+        if let Some(stream) = self.stream.take() {
+            let _ = stream.pause();
+            // Let the cpal callback drain its final partial buffer into our mutex.
+            std::thread::sleep(Duration::from_millis(25));
+            drop(stream);
+        }
         let raw = self.buffer.lock().unwrap().clone();
         let mono = downmix_to_mono(&raw, self.channels);
         resample_to_16k_mono(&mono, self.input_sample_rate)
@@ -172,12 +178,12 @@ fn resample_to_16k_mono(samples: &[f32], input_rate: u32) -> Result<Vec<f32>, Au
     }
 
     let ratio = input_rate as f64 / TARGET_SAMPLE_RATE as f64;
-    let output_len = ((samples.len() as f64) / ratio).ceil() as usize;
-    let mut out = Vec::with_capacity(output_len);
+    let output_len = ((samples.len() as f64) / ratio).round() as usize;
+    let mut out = Vec::with_capacity(output_len.max(1));
 
-    for i in 0..output_len {
+    for i in 0..output_len.max(1) {
         let src_pos = i as f64 * ratio;
-        let idx = src_pos as usize;
+        let idx = src_pos.floor() as usize;
         let frac = (src_pos - idx as f64) as f32;
         let s0 = samples.get(idx).copied().unwrap_or(0.0);
         let s1 = samples.get(idx + 1).copied().unwrap_or(s0);

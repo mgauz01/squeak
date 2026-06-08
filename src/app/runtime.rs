@@ -2,6 +2,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use std::time::Instant;
+
 use crossbeam_channel::Receiver;
 use tracing::{info, warn};
 
@@ -10,7 +12,8 @@ use crate::app::single_instance::SingleInstance;
 use crate::app::state::{AppState, StateMachine, TransitionError};
 use crate::asr::{AsrError, AsrWorker};
 use crate::audio::{
-    log_audio_stats, maybe_write_debug_wav, peak_normalize, AudioCapture, AudioError, AudioLevelMeter,
+    log_audio_stats, maybe_write_debug_wav, peak_normalize, trim_leading_silence, AudioCapture,
+    AudioError, AudioLevelMeter, TARGET_SAMPLE_RATE,
 };
 use crate::config::{AsrModelId, Config, GrammarModelId};
 use crate::hotkeys;
@@ -261,6 +264,7 @@ impl AppRuntime {
             .expect("audio just initialized")
             .start()
             .map_err(RuntimeError::Audio)?;
+        self.asr.preload_in_background(self.config.asr_model());
         overlay::set_mode(&self.overlay_tx, overlay::OverlayMode::Recording);
         Ok(())
     }
@@ -298,13 +302,18 @@ impl AppRuntime {
     }
 
     fn process_recording(&mut self) -> Result<(), RuntimeError> {
+        let pipeline_start = Instant::now();
+        let model = self.config.asr_model();
+
         let mut samples = self
             .audio
             .as_mut()
             .ok_or(RuntimeError::Message("microphone not available".into()))?
             .stop()
             .map_err(RuntimeError::Audio)?;
+        let capture_ms = pipeline_start.elapsed().as_millis();
 
+        let prep_start = Instant::now();
         let stats = peak_normalize(&mut samples);
         log_audio_stats(stats);
         maybe_write_debug_wav(&samples);
@@ -319,14 +328,40 @@ impl AppRuntime {
             );
         }
 
+        if stats.rms < 0.008 {
+            return self.fail_processing(&format!(
+                "no speech detected (mostly silence — hold Win+Ctrl, speak, then release; captured {} ms)",
+                stats.duration_ms
+            ));
+        }
+
+        if !trim_leading_silence(&mut samples, 0.012, (TARGET_SAMPLE_RATE / 100) as usize) {
+            return self.fail_processing(&format!(
+                "no speech detected (only silence in recording — speak while holding Win+Ctrl; captured {} ms)",
+                stats.duration_ms
+            ));
+        }
+
+        if samples.len() < 1280 {
+            return self.fail_processing(&format!(
+                "recording too short after trimming silence ({} ms) — hold Win+Ctrl longer while speaking",
+                (samples.len() as u64 * 1000) / TARGET_SAMPLE_RATE as u64
+            ));
+        }
+
         if self.asr.is_downloading() {
             return self.fail_processing("model is still downloading");
         }
 
-        self.asr
-            .ensure_ready(self.config.asr_model())
-            .map_err(|e| RuntimeError::Message(e.to_string()))?;
+        if !self.asr.is_ready(model) {
+            self.asr
+                .ensure_ready(model)
+                .map_err(|e| RuntimeError::Message(e.to_string()))?;
+        }
+        let prep_ms = prep_start.elapsed().as_millis();
+        let trimmed_audio_ms = (samples.len() as u64 * 1000) / TARGET_SAMPLE_RATE as u64;
 
+        let asr_start = Instant::now();
         let raw = self.asr.transcribe(samples).map_err(|e| match e {
             AsrError::EmptyAudio => RuntimeError::Message("empty audio".into()),
             AsrError::AudioTooShort { samples, min } => RuntimeError::Message(format!(
@@ -334,11 +369,12 @@ impl AppRuntime {
             )),
             other => RuntimeError::Message(other.to_string()),
         })?;
+        let asr_ms = asr_start.elapsed().as_millis();
 
         if raw.trim().is_empty() {
-            return self.fail_processing(
-                "no speech detected (recognizer returned empty — try speaking louder or holding Win+Ctrl a bit longer)",
-            );
+            return self.fail_processing(&format!(
+                "no speech detected (recognizer returned empty — {trimmed_audio_ms} ms audio after trim; speak clearly before release)"
+            ));
         }
 
         let context = foreground_process_name()
@@ -348,12 +384,14 @@ impl AppRuntime {
             context,
             grammar_enabled: self.config.grammar_enabled(),
         };
+        let post_start = Instant::now();
         let text = postprocess::postprocess_with_worker(
             &raw,
             options,
             Some(&self.grammar),
             self.config.grammar_model(),
         );
+        let post_ms = post_start.elapsed().as_millis();
 
         if text.is_empty() {
             return self.fail_processing(&format!(
@@ -371,7 +409,19 @@ impl AppRuntime {
             .map_err(RuntimeError::State)?;
 
         let captured = self.injection_target.take();
+        let deliver_start = Instant::now();
         let outcome = self.delivery.deliver(&text, captured);
+        let deliver_ms = deliver_start.elapsed().as_millis();
+        let total_ms = pipeline_start.elapsed().as_millis();
+        info!(
+            capture_ms,
+            prep_ms,
+            asr_ms,
+            post_ms,
+            deliver_ms,
+            total_ms,
+            "Dictation pipeline timing"
+        );
 
         self.state
             .apply(AppEvent::DeliveryComplete)
@@ -379,7 +429,9 @@ impl AppRuntime {
         overlay::sync(&self.overlay_tx, self.state.state());
         match outcome {
             DeliveryOutcome::Injected | DeliveryOutcome::PastedViaClipboard => {
-                eprintln!("Transcript pasted.");
+                eprintln!(
+                    "Transcript pasted ({total_ms} ms: capture {capture_ms}, ASR {asr_ms}, paste {deliver_ms})."
+                );
             }
             DeliveryOutcome::CopiedToClipboard | DeliveryOutcome::SavedOnly => {}
         }

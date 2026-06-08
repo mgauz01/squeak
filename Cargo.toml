@@ -30,7 +30,7 @@ path = "examples/gec_bench.rs"
 required-features = ["gec-tiny", "gec-coedit"]
 
 [features]
-default = []
+default = ["parakeet"]
 parakeet = []
 cohere = []
 canary = []

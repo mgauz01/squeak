@@ -10,7 +10,7 @@ use crate::output::clipboard::{self, ClipboardError};
 use crate::output::inject::{self, InjectError};
 use crate::platform::win::focus::{self, FocusTarget};
 
-const FOCUS_SETTLE_MS: u64 = 75;
+const FOCUS_SETTLE_MS: u64 = 40;
 
 #[derive(Debug, Error)]
 pub enum DeliveryError {

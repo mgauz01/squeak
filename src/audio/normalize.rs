@@ -73,6 +73,29 @@ pub fn peak_normalize(samples: &mut [f32]) -> AudioStats {
     stats
 }
 
+/// Drop leading silence from mic pre-roll so ASR sees speech first.
+pub fn trim_leading_silence(samples: &mut Vec<f32>, threshold: f32, hop: usize) -> bool {
+    if samples.is_empty() {
+        return false;
+    }
+    let hop = hop.max(1);
+    let mut start = samples.len();
+    for (i, chunk) in samples.chunks(hop).enumerate() {
+        let peak = chunk.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
+        if peak >= threshold {
+            start = i * hop;
+            break;
+        }
+    }
+    if start >= samples.len() {
+        return false;
+    }
+    if start > 0 {
+        samples.drain(..start);
+    }
+    true
+}
+
 pub fn log_audio_stats(stats: AudioStats) {
     info!(
         samples = stats.samples,
@@ -162,5 +185,20 @@ mod tests {
         let before = samples.clone();
         peak_normalize(&mut samples);
         assert_eq!(samples, before);
+    }
+
+    #[test]
+    fn trim_leading_silence_keeps_speech() {
+        let mut samples = vec![0.0; 4800];
+        samples[4000..].fill(0.2);
+        assert!(trim_leading_silence(&mut samples, 0.012, 160));
+        assert!(samples.len() < 4800);
+        assert!(samples.iter().any(|&s| s.abs() > 0.1));
+    }
+
+    #[test]
+    fn trim_leading_silence_all_silent_fails() {
+        let mut samples = vec![0.0; 3200];
+        assert!(!trim_leading_silence(&mut samples, 0.012, 160));
     }
 }
