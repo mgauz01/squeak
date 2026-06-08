@@ -18,10 +18,10 @@ use crate::audio::{
 use crate::config::{AsrModelId, Config, GrammarModelId};
 use crate::hotkeys;
 use crate::output::{DeliveryChain, DeliveryError, DeliveryOutcome};
+use crate::platform::win::autostart;
 use crate::platform::win::focus::FocusTarget;
 use crate::platform::win::process::foreground_process_name;
 use crate::postprocess::{self, GrammarWorker, InputContext, PostProcessOptions};
-use crate::platform::win::autostart;
 use crate::ui::{overlay, tray};
 use crate::ui_visual::ui_phase;
 
@@ -63,15 +63,7 @@ impl AppRuntime {
             event_tx.clone(),
             tray_rx,
             Arc::clone(&running),
-            tray::TrayInit {
-                asr_model: config.asr_model(),
-                grammar_enabled: config.grammar_enabled(),
-                grammar_model: config.grammar_model(),
-                directml: config.directml,
-                xnnpack: config.xnnpack,
-                asr_threads: config.asr_threads,
-                autostart: config.autostart,
-            },
+            tray::TrayInit::from_config(&config),
         )?;
         if let Err(err) = autostart::apply(config.autostart) {
             warn!("Could not sync autostart registry: {err}");
@@ -299,27 +291,17 @@ impl AppRuntime {
             return Ok(());
         }
         self.config.asr_threads = threads;
-        self.config
-            .save()
-            .map_err(|e| RuntimeError::Message(e.to_string()))?;
-        let label = if threads == 0 {
-            format!("auto ({})", self.config.asr_thread_count())
-        } else {
-            threads.to_string()
-        };
+        self.save_config()?;
+        let label = Config::format_asr_threads(threads);
         eprintln!("ASR CPU threads set to {label}. Reloading speech model…");
         info!("ASR threads set to {label}");
         self.reload_asr_runtime()
     }
 
     fn handle_toggle_directml(&mut self, enabled: bool) -> Result<(), RuntimeError> {
-        if self.config.directml == enabled {
+        if !self.update_bool_config(enabled, |c| c.directml, |c, v| c.directml = v)? {
             return Ok(());
         }
-        self.config.directml = enabled;
-        self.config
-            .save()
-            .map_err(|e| RuntimeError::Message(e.to_string()))?;
         let model = self.config.asr_model();
         if enabled && !model.compatible_with_directml() {
             eprintln!(
@@ -337,13 +319,9 @@ impl AppRuntime {
     }
 
     fn handle_toggle_xnnpack(&mut self, enabled: bool) -> Result<(), RuntimeError> {
-        if self.config.xnnpack == enabled {
+        if !self.update_bool_config(enabled, |c| c.xnnpack, |c, v| c.xnnpack = v)? {
             return Ok(());
         }
-        self.config.xnnpack = enabled;
-        self.config
-            .save()
-            .map_err(|e| RuntimeError::Message(e.to_string()))?;
         if enabled && !crate::asr::xnnpack_available() {
             eprintln!(
                 "XNNPACK enabled in config, but this ONNX Runtime build has no XNNPACK provider; using CPU."
@@ -359,14 +337,10 @@ impl AppRuntime {
     }
 
     fn handle_toggle_autostart(&mut self, enabled: bool) -> Result<(), RuntimeError> {
-        if self.config.autostart == enabled {
+        if !self.update_bool_config(enabled, |c| c.autostart, |c, v| c.autostart = v)? {
             return Ok(());
         }
-        self.config.autostart = enabled;
-        self.config
-            .save()
-            .map_err(|e| RuntimeError::Message(e.to_string()))?;
-        autostart::apply(enabled).map_err(|e| RuntimeError::Message(e.to_string()))?;
+        autostart::apply(enabled).map_err(runtime_io_err)?;
         eprintln!(
             "Start with Windows {}",
             if enabled { "enabled" } else { "disabled" }
@@ -379,12 +353,29 @@ impl AppRuntime {
         use crate::config::paths::config_path;
         let path = config_path();
         if !path.exists() {
-            self.config
-                .save()
-                .map_err(|e| RuntimeError::Message(e.to_string()))?;
+            self.save_config()?;
         }
-        autostart::open_in_shell(&path).map_err(|e| RuntimeError::Message(e.to_string()))?;
+        autostart::open_in_shell(&path).map_err(runtime_io_err)?;
         Ok(())
+    }
+
+    fn save_config(&self) -> Result<(), RuntimeError> {
+        self.config.save().map_err(runtime_io_err)
+    }
+
+    /// Persist a boolean config field when `enabled` differs. Returns `true` if saved.
+    fn update_bool_config(
+        &mut self,
+        enabled: bool,
+        get: fn(&Config) -> bool,
+        set: fn(&mut Config, bool),
+    ) -> Result<bool, RuntimeError> {
+        if get(&self.config) == enabled {
+            return Ok(false);
+        }
+        set(&mut self.config, enabled);
+        self.save_config()?;
+        Ok(true)
     }
 
     fn reload_asr_runtime(&mut self) -> Result<(), RuntimeError> {
@@ -636,6 +627,10 @@ impl AppRuntime {
         self.sync_ui();
         Ok(())
     }
+}
+
+fn runtime_io_err(err: std::io::Error) -> RuntimeError {
+    RuntimeError::Message(err.to_string())
 }
 
 #[derive(Debug, thiserror::Error)]

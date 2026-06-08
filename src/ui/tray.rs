@@ -10,7 +10,7 @@ use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 
 use crate::app::{AppEvent, UserAction};
 use crate::asr::recommended_thread_count;
-use crate::config::{AsrModelId, GrammarModelId};
+use crate::config::{AsrModelId, Config, GrammarModelId};
 use crate::ui_visual::{tray_icon_rgba, tray_icon_state, TrayIconState, UiPhase};
 
 use windows::Win32::UI::WindowsAndMessaging::MSG;
@@ -30,6 +30,20 @@ pub struct TrayInit {
     pub xnnpack: bool,
     pub asr_threads: usize,
     pub autostart: bool,
+}
+
+impl TrayInit {
+    pub fn from_config(config: &Config) -> Self {
+        Self {
+            asr_model: config.asr_model(),
+            grammar_enabled: config.grammar_enabled(),
+            grammar_model: config.grammar_model(),
+            directml: config.directml,
+            xnnpack: config.xnnpack,
+            asr_threads: config.asr_threads,
+            autostart: config.autostart,
+        }
+    }
 }
 
 pub fn spawn(
@@ -59,14 +73,15 @@ fn build_tray_icon(state: TrayIconState) -> Result<Icon, Box<dyn std::error::Err
     Ok(Icon::from_rgba(rgba, size, size)?)
 }
 
-fn append_model_item(
+fn append_checked_choice<T: Copy + PartialEq>(
     menu: &Submenu,
-    model: AsrModelId,
-    active: AsrModelId,
-    model_ids: &mut Vec<(muda::MenuId, AsrModelId)>,
+    label: &str,
+    value: T,
+    active: T,
+    ids: &mut Vec<(muda::MenuId, T)>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let item = CheckMenuItem::new(model.menu_label(), true, model == active, None);
-    model_ids.push((item.id().clone(), model));
+    let item = CheckMenuItem::new(label, true, value == active, None);
+    ids.push((item.id().clone(), value));
     menu.append(&item)?;
     Ok(())
 }
@@ -84,24 +99,67 @@ fn append_grammar_item(
     Ok(())
 }
 
-fn append_thread_item(
-    menu: &Submenu,
-    label: &str,
-    threads: usize,
-    active: usize,
-    thread_ids: &mut Vec<(muda::MenuId, usize)>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let item = CheckMenuItem::new(label, true, threads == active, None);
-    thread_ids.push((item.id().clone(), threads));
-    menu.append(&item)?;
-    Ok(())
-}
-
 #[derive(Debug, Clone, Copy)]
 struct TrayToggleState {
     directml: bool,
     xnnpack: bool,
     autostart: bool,
+}
+
+#[derive(Clone, Copy)]
+enum TrayBoolSetting {
+    DirectMl,
+    Xnnpack,
+    Autostart,
+}
+
+impl TrayBoolSetting {
+    fn flip(self, toggles: &mut TrayToggleState) -> (bool, UserAction, &'static str) {
+        match self {
+            Self::DirectMl => {
+                toggles.directml = !toggles.directml;
+                (
+                    toggles.directml,
+                    UserAction::ToggleDirectMl(toggles.directml),
+                    "DirectML",
+                )
+            }
+            Self::Xnnpack => {
+                toggles.xnnpack = !toggles.xnnpack;
+                (
+                    toggles.xnnpack,
+                    UserAction::ToggleXnnpack(toggles.xnnpack),
+                    "XNNPACK",
+                )
+            }
+            Self::Autostart => {
+                toggles.autostart = !toggles.autostart;
+                (
+                    toggles.autostart,
+                    UserAction::ToggleAutostart(toggles.autostart),
+                    "start with Windows",
+                )
+            }
+        }
+    }
+}
+
+fn on_bool_toggle(
+    setting: TrayBoolSetting,
+    item: &CheckMenuItem,
+    toggles: &RefCell<TrayToggleState>,
+    tx: &Sender<AppEvent>,
+) {
+    let (enabled, action, label) = {
+        let mut state = toggles.borrow_mut();
+        setting.flip(&mut state)
+    };
+    let _ = item.set_checked(enabled);
+    let _ = tx.send(AppEvent::UserAction(action));
+    eprintln!(
+        "{} {label}…",
+        if enabled { "Enabling" } else { "Disabling" }
+    );
 }
 
 fn run_tray(
@@ -121,27 +179,36 @@ fn run_tray(
 
     let moonshine_menu = Submenu::new("Moonshine", true);
     for model in AsrModelId::MOONSHINE_ALL {
-        append_model_item(&moonshine_menu, model, init.asr_model, &mut model_ids)?;
+        append_checked_choice(
+            &moonshine_menu,
+            model.menu_label(),
+            model,
+            init.asr_model,
+            &mut model_ids,
+        )?;
     }
     model_menu.append(&moonshine_menu)?;
 
     #[cfg(feature = "parakeet")]
-    append_model_item(
+    append_checked_choice(
         &model_menu,
+        AsrModelId::Parakeet.menu_label(),
         AsrModelId::Parakeet,
         init.asr_model,
         &mut model_ids,
     )?;
     #[cfg(feature = "cohere")]
-    append_model_item(
+    append_checked_choice(
         &model_menu,
+        AsrModelId::Cohere.menu_label(),
         AsrModelId::Cohere,
         init.asr_model,
         &mut model_ids,
     )?;
     #[cfg(feature = "canary")]
-    append_model_item(
+    append_checked_choice(
         &model_menu,
+        AsrModelId::Canary.menu_label(),
         AsrModelId::Canary,
         init.asr_model,
         &mut model_ids,
@@ -150,7 +217,7 @@ fn run_tray(
     let threads_menu = Submenu::new("ASR CPU threads", true);
     let mut thread_ids = Vec::new();
     let auto_threads = recommended_thread_count();
-    append_thread_item(
+    append_checked_choice(
         &threads_menu,
         &format!("Auto ({auto_threads} threads)"),
         0,
@@ -158,7 +225,7 @@ fn run_tray(
         &mut thread_ids,
     )?;
     for n in [4_usize, 8, 16] {
-        append_thread_item(
+        append_checked_choice(
             &threads_menu,
             &format!("{n} threads"),
             n,
@@ -276,49 +343,39 @@ fn run_tray(
             }
             for (id, threads) in &thread_ids {
                 if *id == event.id() {
-                    let _ = event_tx_menu.send(AppEvent::UserAction(UserAction::SetAsrThreads(
-                        *threads,
-                    )));
-                    eprintln!("Setting ASR CPU threads to {}…", threads_label(*threads));
+                    let _ = event_tx_menu
+                        .send(AppEvent::UserAction(UserAction::SetAsrThreads(*threads)));
+                    eprintln!(
+                        "Setting ASR CPU threads to {}…",
+                        Config::format_asr_threads(*threads)
+                    );
                     return;
                 }
             }
             if directml_id == event.id() {
-                let mut toggles = toggle_state.borrow_mut();
-                toggles.directml = !toggles.directml;
-                let _ = directml_item.set_checked(toggles.directml);
-                let _ = event_tx_menu.send(AppEvent::UserAction(UserAction::ToggleDirectMl(
-                    toggles.directml,
-                )));
-                eprintln!(
-                    "{} DirectML…",
-                    if toggles.directml { "Enabling" } else { "Disabling" }
+                on_bool_toggle(
+                    TrayBoolSetting::DirectMl,
+                    &directml_item,
+                    &toggle_state,
+                    &event_tx_menu,
                 );
                 return;
             }
             if xnnpack_id == event.id() {
-                let mut toggles = toggle_state.borrow_mut();
-                toggles.xnnpack = !toggles.xnnpack;
-                let _ = xnnpack_item.set_checked(toggles.xnnpack);
-                let _ = event_tx_menu.send(AppEvent::UserAction(UserAction::ToggleXnnpack(
-                    toggles.xnnpack,
-                )));
-                eprintln!(
-                    "{} XNNPACK…",
-                    if toggles.xnnpack { "Enabling" } else { "Disabling" }
+                on_bool_toggle(
+                    TrayBoolSetting::Xnnpack,
+                    &xnnpack_item,
+                    &toggle_state,
+                    &event_tx_menu,
                 );
                 return;
             }
             if autostart_id == event.id() {
-                let mut toggles = toggle_state.borrow_mut();
-                toggles.autostart = !toggles.autostart;
-                let _ = autostart_item.set_checked(toggles.autostart);
-                let _ = event_tx_menu.send(AppEvent::UserAction(UserAction::ToggleAutostart(
-                    toggles.autostart,
-                )));
-                eprintln!(
-                    "{} start with Windows…",
-                    if toggles.autostart { "Enabling" } else { "Disabling" }
+                on_bool_toggle(
+                    TrayBoolSetting::Autostart,
+                    &autostart_item,
+                    &toggle_state,
+                    &event_tx_menu,
                 );
                 return;
             }
@@ -357,14 +414,6 @@ fn run_tray(
     }
 
     Ok(())
-}
-
-fn threads_label(threads: usize) -> String {
-    if threads == 0 {
-        format!("auto ({})", recommended_thread_count())
-    } else {
-        threads.to_string()
-    }
 }
 
 /// Windows requires a Win32 message pump on the tray thread or the icon never appears.

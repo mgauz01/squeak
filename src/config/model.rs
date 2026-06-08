@@ -323,6 +323,15 @@ impl Config {
         }
     }
 
+    /// Tray/log label for an `asr_threads` value (`0` = auto).
+    pub fn format_asr_threads(raw: usize) -> String {
+        if raw == 0 {
+            format!("auto ({})", crate::asr::recommended_thread_count())
+        } else {
+            raw.to_string()
+        }
+    }
+
     pub fn load() -> Self {
         let path = super::paths::config_path();
         if !path.exists() {
@@ -372,6 +381,12 @@ mod tests {
             ..Config::default()
         };
         assert_eq!(fixed.asr_thread_count(), 6);
+    }
+
+    #[test]
+    fn format_asr_threads_labels() {
+        assert_eq!(Config::format_asr_threads(8), "8");
+        assert!(Config::format_asr_threads(0).starts_with("auto ("));
     }
 
     #[test]

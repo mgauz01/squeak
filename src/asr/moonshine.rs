@@ -249,4 +249,3 @@ pub fn is_likely_directml_inference_error(message: &str) -> bool {
         || lower.contains("directml")
         || (lower.contains("slice") && lower.contains("inference"))
 }
-

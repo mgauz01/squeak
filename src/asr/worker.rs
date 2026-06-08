@@ -6,9 +6,9 @@ use crossbeam_channel::{Receiver, Sender};
 use tracing::{info, warn};
 
 use crate::app::AppEvent;
+use crate::asr::engine::recommended_thread_count;
 use crate::asr::engine::{AsrEngine, AsrError};
 use crate::asr::factory::create_engine;
-use crate::asr::engine::recommended_thread_count;
 use crate::asr::moonshine::{configure_ort_runtime, is_likely_directml_inference_error};
 use crate::asr::provision::{ensure_model, DownloadProgress};
 use crate::config::AsrModelId;
@@ -170,7 +170,11 @@ impl AsrWorker {
     }
 
     /// Apply CPU/GPU runtime settings and schedule a model reload on the worker thread.
-    pub fn apply_ort_config(&self, ort: AsrWorkerConfig, model: AsrModelId) -> Result<(), AsrError> {
+    pub fn apply_ort_config(
+        &self,
+        ort: AsrWorkerConfig,
+        model: AsrModelId,
+    ) -> Result<(), AsrError> {
         self.tx
             .send(WorkerCommand::ApplyOrtConfig { ort, model })
             .map_err(|_| AsrError::WorkerClosed)
@@ -215,23 +219,9 @@ fn worker_main(rx: Receiver<WorkerCommand>, downloading: Arc<AtomicBool>, ort: A
                 let result = transcribe_loaded(&mut state, &samples, &downloading);
                 let _ = reply.send(result);
             }
-            WorkerCommand::Reload { model } => {
-                state.engine = None;
-                state.loaded = Some(model);
-                info!(
-                    "ASR model scheduled for reload on next ensure_ready ({})",
-                    model.config_key()
-                );
-            }
+            WorkerCommand::Reload { model } => schedule_reload(&mut state, model, None),
             WorkerCommand::ApplyOrtConfig { ort, model } => {
-                state.ort = ort;
-                state.engine = None;
-                state.loaded = Some(model);
-                state.force_cpu = false;
-                info!(
-                    "ASR runtime config updated ({} threads); model will reload",
-                    ort.threads
-                );
+                schedule_reload(&mut state, model, Some(ort));
             }
             WorkerCommand::Shutdown => break,
         }
@@ -266,6 +256,24 @@ fn ensure_ready(
 
     load_engine(state, model, &dir)?;
     Ok(())
+}
+
+fn schedule_reload(state: &mut WorkerState, model: AsrModelId, ort: Option<AsrWorkerConfig>) {
+    if let Some(ort) = ort {
+        state.ort = ort;
+        state.force_cpu = false;
+        info!(
+            "ASR runtime config updated ({} threads); model will reload",
+            ort.threads
+        );
+    } else {
+        info!(
+            "ASR model scheduled for reload on next ensure_ready ({})",
+            model.config_key()
+        );
+    }
+    state.engine = None;
+    state.loaded = Some(model);
 }
 
 fn use_directml(state: &WorkerState, model: AsrModelId) -> bool {
