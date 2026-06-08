@@ -92,8 +92,8 @@ fn run_tray(
     grammar_enabled: bool,
     grammar_model: GrammarModelId,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let mut tray_icon_state = TrayIconState::Idle;
-    let icon = build_tray_icon(tray_icon_state)?;
+    let mut current_icon = TrayIconState::Idle;
+    let icon = build_tray_icon(current_icon)?;
 
     let exit_item = MenuItem::new("Exit", true, None);
     let exit_id = exit_item.id().clone();
@@ -220,9 +220,9 @@ fn run_tray(
             match status_rx.recv_timeout(std::time::Duration::from_millis(10)) {
                 Ok(TrayCommand::SetPhase(phase)) => {
                     let next = tray_icon_state(phase);
-                    if next != tray_icon_state {
-                        tray_icon_state = next;
-                        if let Ok(icon) = build_tray_icon(tray_icon_state) {
+                    if next != current_icon {
+                        current_icon = next;
+                        if let Ok(icon) = build_tray_icon(current_icon) {
                             let _ = tray.set_icon(Some(icon));
                         }
                     }
