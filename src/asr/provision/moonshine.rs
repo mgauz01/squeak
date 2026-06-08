@@ -66,10 +66,7 @@ pub fn download_tarball_to_dir_optional(
 
     http::stream_url_to_writer(url, &mut archive_file, |bytes, total| {
         downloaded = bytes;
-        progress(DownloadProgress::Downloading {
-            downloaded,
-            total,
-        });
+        progress(DownloadProgress::Downloading { downloaded, total });
     })
     .map_err(ModelDownloadError::Http)?;
 
@@ -162,10 +159,7 @@ fn find_model_root(extract_root: &Path, required_files: &[&str]) -> Option<PathB
 }
 
 fn is_complete_dir(dir: &Path, required_files: &[&str]) -> bool {
-    dir.is_dir()
-        && required_files
-            .iter()
-            .all(|name| dir.join(name).is_file())
+    dir.is_dir() && required_files.iter().all(|name| dir.join(name).is_file())
 }
 
 #[cfg(test)]

@@ -218,6 +218,16 @@ pub struct Config {
     pub autostart: bool,
     #[serde(default)]
     pub directml: bool,
+    /// ONNX Runtime CPU thread budget (`OMP_NUM_THREADS`). `0` = auto (logical cores, max 8).
+    #[serde(default)]
+    pub asr_threads: usize,
+    /// Use XNNPACK CPU kernels when built with the `xnnpack` feature.
+    #[serde(default = "default_xnnpack")]
+    pub xnnpack: bool,
+}
+
+fn default_xnnpack() -> bool {
+    cfg!(feature = "xnnpack")
 }
 
 impl<'de> Deserialize<'de> for Config {
@@ -236,6 +246,10 @@ impl<'de> Deserialize<'de> for Config {
             autostart: bool,
             #[serde(default)]
             directml: bool,
+            #[serde(default)]
+            asr_threads: usize,
+            #[serde(default = "default_xnnpack")]
+            xnnpack: bool,
         }
 
         let raw = Raw::deserialize(deserializer)?;
@@ -251,6 +265,8 @@ impl<'de> Deserialize<'de> for Config {
             grammar_model: raw.grammar_model,
             autostart: raw.autostart,
             directml: raw.directml,
+            asr_threads: raw.asr_threads,
+            xnnpack: raw.xnnpack,
         })
     }
 }
@@ -267,6 +283,8 @@ impl Default for Config {
             grammar_model: GrammarModelId::default(),
             autostart: true,
             directml: false,
+            asr_threads: 0,
+            xnnpack: default_xnnpack(),
         }
     }
 }
@@ -294,6 +312,15 @@ impl Config {
 
     pub fn set_grammar_model(&mut self, model: GrammarModelId) {
         self.grammar_model = model;
+    }
+
+    /// Resolved ONNX/OpenMP thread count for ASR inference.
+    pub fn asr_thread_count(&self) -> usize {
+        if self.asr_threads == 0 {
+            crate::asr::recommended_thread_count()
+        } else {
+            self.asr_threads.clamp(1, 16)
+        }
     }
 
     pub fn load() -> Self {
@@ -332,6 +359,22 @@ mod tests {
         assert_eq!(cfg.grammar_model(), GrammarModelId::Tiny);
         assert!(cfg.autostart);
         assert!(!cfg.directml);
+        assert_eq!(cfg.asr_threads, 0);
+        #[cfg(feature = "xnnpack")]
+        assert!(cfg.xnnpack);
+        #[cfg(not(feature = "xnnpack"))]
+        assert!(!cfg.xnnpack);
+    }
+
+    #[test]
+    fn asr_thread_count_auto_and_override() {
+        let auto = Config::default();
+        assert!(auto.asr_thread_count() >= 1);
+        let fixed = Config {
+            asr_threads: 6,
+            ..Config::default()
+        };
+        assert_eq!(fixed.asr_thread_count(), 6);
     }
 
     #[test]

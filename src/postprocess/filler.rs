@@ -1,15 +1,7 @@
 use super::context::InputContext;
 
 const PROSE_FILLERS: &[&str] = &[
-    "um",
-    "uh",
-    "er",
-    "ah",
-    "like",
-    "you know",
-    "i mean",
-    "sort of",
-    "kind of",
+    "um", "uh", "er", "ah", "like", "you know", "i mean", "sort of", "kind of",
 ];
 
 const CODE_FILLERS: &[&str] = &["um", "uh"];

@@ -66,11 +66,29 @@ pub const PILL_INACTIVE_SCALE: f32 = 0.6;
 
 /// Visual scale for the top-center pill (width + height).
 pub fn phase_display_scale(phase: UiPhase) -> f32 {
-    match phase {
-        UiPhase::Armed => PILL_INACTIVE_SCALE,
-        UiPhase::RecordingPtt | UiPhase::RecordingHandsFree | UiPhase::Processing => 1.0,
-        UiPhase::Hidden => PILL_INACTIVE_SCALE,
+    if matches!(phase, UiPhase::Armed) {
+        PILL_INACTIVE_SCALE
+    } else {
+        1.0
     }
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) fn lerp_rgb(a: (u8, u8, u8), b: (u8, u8, u8), t: f32) -> (u8, u8, u8) {
+    let t = t.clamp(0.0, 1.0);
+    (
+        (a.0 as f32 + (b.0 as f32 - a.0 as f32) * t) as u8,
+        (a.1 as f32 + (b.1 as f32 - a.1 as f32) * t) as u8,
+        (a.2 as f32 + (b.2 as f32 - a.2 as f32) * t) as u8,
+    )
+}
+
+pub(crate) fn scale_rgb((r, g, b): (u8, u8, u8), factor: f32) -> (u8, u8, u8) {
+    (
+        (r as f32 * factor).min(255.0) as u8,
+        (g as f32 * factor).min(255.0) as u8,
+        (b as f32 * factor).min(255.0) as u8,
+    )
 }
 
 /// 16×16 RGBA tray icon pixels (pill purple tones).
@@ -120,14 +138,6 @@ pub fn tray_icon_rgba(state: TrayIconState, size: u32) -> Vec<u8> {
     rgba
 }
 
-fn scale_rgb((r, g, b): (u8, u8, u8), factor: f32) -> (u8, u8, u8) {
-    (
-        (r as f32 * factor) as u8,
-        (g as f32 * factor) as u8,
-        (b as f32 * factor) as u8,
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -135,10 +145,7 @@ mod tests {
 
     #[test]
     fn armed_when_mic_armed_and_idle() {
-        assert_eq!(
-            ui_phase(AppState::Idle, true),
-            UiPhase::Armed
-        );
+        assert_eq!(ui_phase(AppState::Idle, true), UiPhase::Armed);
     }
 
     #[test]
@@ -175,5 +182,16 @@ mod tests {
         let px = tray_icon_rgba(TrayIconState::Idle, 16);
         let colored = px.chunks(4).filter(|p| p[3] > 0).count();
         assert!(colored > 20);
+    }
+
+    #[test]
+    fn lerp_rgb_endpoints() {
+        assert_eq!(lerp_rgb((0, 0, 0), (100, 200, 50), 0.0), (0, 0, 0));
+        assert_eq!(lerp_rgb((0, 0, 0), (100, 200, 50), 1.0), (100, 200, 50));
+    }
+
+    #[test]
+    fn scale_rgb_clamps_to_byte_max() {
+        assert_eq!(scale_rgb((200, 200, 200), 2.0), (255, 255, 255));
     }
 }

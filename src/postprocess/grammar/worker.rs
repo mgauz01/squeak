@@ -71,12 +71,10 @@ impl GrammarWorker {
         }
         thread::Builder::new()
             .name("squeak-grammar-preload".into())
-            .spawn(move || {
-                match reply_rx.recv() {
-                    Ok(Ok(())) => eprintln!("Grammar model ready."),
-                    Ok(Err(err)) => eprintln!("Grammar model load failed: {err}"),
-                    Err(_) => eprintln!("Grammar model load interrupted."),
-                }
+            .spawn(move || match reply_rx.recv() {
+                Ok(Ok(())) => eprintln!("Grammar model ready."),
+                Ok(Err(err)) => eprintln!("Grammar model load failed: {err}"),
+                Err(_) => eprintln!("Grammar model load interrupted."),
             })
             .ok();
     }
@@ -177,10 +175,9 @@ fn ensure_ready(
             DownloadProgress::Starting { model } => {
                 info!("Downloading grammar model: {}", model.config_key())
             }
-            DownloadProgress::Downloading {
-                downloaded,
-                total,
-            } => info!("Grammar download: {downloaded} / {:?}", total),
+            DownloadProgress::Downloading { downloaded, total } => {
+                info!("Grammar download: {downloaded} / {:?}", total)
+            }
             DownloadProgress::Extracting => info!("Extracting grammar model files"),
             DownloadProgress::Complete => info!("Grammar model download complete"),
         });

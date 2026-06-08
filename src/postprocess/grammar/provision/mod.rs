@@ -21,10 +21,7 @@ pub use hf_files::download_hf_files;
 #[derive(Debug, Clone)]
 pub enum DownloadProgress {
     Starting { model: GrammarModelId },
-    Downloading {
-        downloaded: u64,
-        total: Option<u64>,
-    },
+    Downloading { downloaded: u64, total: Option<u64> },
     Extracting,
     Complete,
 }

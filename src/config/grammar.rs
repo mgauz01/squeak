@@ -98,7 +98,8 @@ impl Serialize for GrammarModelId {
 impl<'de> Deserialize<'de> for GrammarModelId {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let s = String::deserialize(deserializer)?;
-        Self::parse(&s).ok_or_else(|| serde::de::Error::custom(format!("unknown grammar model: {s}")))
+        Self::parse(&s)
+            .ok_or_else(|| serde::de::Error::custom(format!("unknown grammar model: {s}")))
     }
 }
 

@@ -26,7 +26,10 @@ pub struct T5OnnxGec {
 }
 
 impl T5OnnxGec {
-    pub fn load_from_dir(dir: &Path, input_prefix: impl Into<String>) -> Result<Self, GrammarError> {
+    pub fn load_from_dir(
+        dir: &Path,
+        input_prefix: impl Into<String>,
+    ) -> Result<Self, GrammarError> {
         for name in REQUIRED_ONNX_FILES {
             let path = dir.join(name);
             if !path.is_file() {
@@ -110,9 +113,8 @@ impl T5OnnxGec {
             .map_err(|e| GrammarError::Polish(e.to_string()))?;
 
         let (shape, data) = hidden;
-        let hidden_states =
-            Array3::from_shape_vec((shape[0], shape[1], shape[2]), data.to_vec())
-                .map_err(|e| GrammarError::Polish(e.to_string()))?;
+        let hidden_states = Array3::from_shape_vec((shape[0], shape[1], shape[2]), data.to_vec())
+            .map_err(|e| GrammarError::Polish(e.to_string()))?;
 
         let encoder_attention_mask =
             Array2::from_shape_vec((batch, seq_len), attention_mask.to_vec())
@@ -148,8 +150,9 @@ impl T5OnnxGec {
             encoder_hidden_states.iter().copied().collect::<Vec<_>>(),
         ))
         .map_err(|e| GrammarError::Polish(e.to_string()))?;
-        let use_cache_branch = Tensor::from_array(([1usize], vec![if use_cache { 1i64 } else { 0i64 }]))
-            .map_err(|e| GrammarError::Polish(e.to_string()))?;
+        let use_cache_branch =
+            Tensor::from_array(([1usize], vec![if use_cache { 1i64 } else { 0i64 }]))
+                .map_err(|e| GrammarError::Polish(e.to_string()))?;
 
         let mut inputs = ort::inputs![
             "input_ids" => decoder_ids,
@@ -217,16 +220,12 @@ impl T5OnnxGec {
                 .map_err(|e| GrammarError::Polish(e.to_string()))?;
             let (k_shape, k_data) = key;
             let (v_shape, v_data) = value;
-            let key_arr = Array3::from_shape_vec(
-                (k_shape[0], k_shape[1], k_shape[2]),
-                k_data.to_vec(),
-            )
-            .map_err(|e| GrammarError::Polish(e.to_string()))?;
-            let val_arr = Array3::from_shape_vec(
-                (v_shape[0], v_shape[1], v_shape[2]),
-                v_data.to_vec(),
-            )
-            .map_err(|e| GrammarError::Polish(e.to_string()))?;
+            let key_arr =
+                Array3::from_shape_vec((k_shape[0], k_shape[1], k_shape[2]), k_data.to_vec())
+                    .map_err(|e| GrammarError::Polish(e.to_string()))?;
+            let val_arr =
+                Array3::from_shape_vec((v_shape[0], v_shape[1], v_shape[2]), v_data.to_vec())
+                    .map_err(|e| GrammarError::Polish(e.to_string()))?;
             next_past.push((key_arr, val_arr));
         }
 

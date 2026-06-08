@@ -3,7 +3,7 @@ use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
 use windows::Win32::UI::Input::KeyboardAndMouse::SetFocus;
 use windows::Win32::UI::WindowsAndMessaging::{
     BringWindowToTop, GetAncestor, GetForegroundWindow, GetGUIThreadInfo, GetWindowThreadProcessId,
-    GUITHREADINFO, GA_ROOT, SetForegroundWindow, ShowWindow, SW_SHOW,
+    SetForegroundWindow, ShowWindow, GA_ROOT, GUITHREADINFO, SW_SHOW,
 };
 
 /// Window that had keyboard focus when dictation started.
@@ -55,7 +55,11 @@ pub fn restore_focus(target: FocusTarget) -> bool {
 
         // SetForegroundWindow must target a top-level window; hwnd may be an edit child.
         let top_level = GetAncestor(hwnd, GA_ROOT);
-        let fg_target = if top_level.0.is_null() { hwnd } else { top_level };
+        let fg_target = if top_level.0.is_null() {
+            hwnd
+        } else {
+            top_level
+        };
 
         let foreground = GetForegroundWindow();
         if foreground == fg_target || foreground == hwnd {

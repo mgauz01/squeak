@@ -42,7 +42,8 @@ pub fn recording_width_fraction(
             (ready_ms.saturating_sub(show_start_ms) as f32 / WARMUP_MS as f32).min(1.0),
         );
         let base = MIN_FRAC + (HOLD_FRAC - MIN_FRAC) * warmup_at_ready;
-        let snap_t = ease_out_cubic((now_ms.saturating_sub(ready_ms) as f32 / SNAP_MS as f32).min(1.0));
+        let snap_t =
+            ease_out_cubic((now_ms.saturating_sub(ready_ms) as f32 / SNAP_MS as f32).min(1.0));
         base + (1.0 - base) * snap_t
     } else {
         warmup_frac.min(HOLD_FRAC)

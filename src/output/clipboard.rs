@@ -1,5 +1,5 @@
 use thiserror::Error;
-use windows::Win32::Foundation::{GlobalFree, HGLOBAL, HANDLE, HWND};
+use windows::Win32::Foundation::{GlobalFree, HANDLE, HGLOBAL, HWND};
 use windows::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, GetClipboardData, OpenClipboard, SetClipboardData,
 };
@@ -23,8 +23,8 @@ pub fn set_text(text: &str) -> Result<(), ClipboardError> {
             return Err(ClipboardError::Failed("EmptyClipboard failed".into()));
         }
 
-        let handle = GlobalAlloc(GMEM_MOVEABLE, byte_len)
-            .map_err(|e| clipboard_err("GlobalAlloc", e))?;
+        let handle =
+            GlobalAlloc(GMEM_MOVEABLE, byte_len).map_err(|e| clipboard_err("GlobalAlloc", e))?;
         let locked = GlobalLock(handle);
         if locked.is_null() {
             let _ = GlobalFree(handle);
@@ -41,8 +41,7 @@ pub fn set_text(text: &str) -> Result<(), ClipboardError> {
             return Err(ClipboardError::Failed("SetClipboardData failed".into()));
         }
 
-        CloseClipboard()
-            .map_err(|e| clipboard_err("CloseClipboard", e))?;
+        CloseClipboard().map_err(|e| clipboard_err("CloseClipboard", e))?;
     }
 
     Ok(())
@@ -75,8 +74,7 @@ pub fn get_text() -> Result<String, ClipboardError> {
             .map_err(|e| ClipboardError::Failed(format!("invalid UTF-16 in clipboard: {e}")))?;
 
         let _ = GlobalUnlock(hmem);
-        CloseClipboard()
-            .map_err(|e| clipboard_err("CloseClipboard", e))?;
+        CloseClipboard().map_err(|e| clipboard_err("CloseClipboard", e))?;
         Ok(text)
     }
 }

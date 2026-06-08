@@ -7,10 +7,10 @@ use std::time::Instant;
 use crossbeam_channel::Receiver;
 use tracing::{info, warn};
 
-use crate::app::{AppEvent, UserAction};
 use crate::app::single_instance::SingleInstance;
 use crate::app::state::{AppState, StateMachine, TransitionError};
-use crate::asr::{AsrError, AsrWorker, ort_accelerator_summary};
+use crate::app::{AppEvent, UserAction};
+use crate::asr::{ort_accelerator_summary, AsrError, AsrWorker, AsrWorkerConfig};
 use crate::audio::{
     log_audio_stats, maybe_write_debug_wav, peak_normalize, trim_leading_silence,
     trim_trailing_silence, AudioCapture, AudioError, AudioLevelMeter, TARGET_SAMPLE_RATE,
@@ -46,7 +46,7 @@ impl AppRuntime {
     pub fn start() -> Result<Self, Box<dyn std::error::Error>> {
         let single_instance = SingleInstance::acquire()?;
         let config = Config::load();
-        let asr = AsrWorker::spawn(config.directml);
+        let asr = AsrWorker::spawn(AsrWorkerConfig::from_app_config(&config));
         let grammar = GrammarWorker::spawn();
         let delivery = DeliveryChain::new();
 
@@ -100,9 +100,10 @@ impl AppRuntime {
         eprintln!("Hold Win+Ctrl to dictate. Shift+Alt+Z pastes last transcript. Purple pill in the taskbar = Squeak running.");
         let model = self.config.asr_model();
         eprintln!(
-            "Using {} on {} — tray → Speech model to change.",
+            "Using {} on {} ({} threads) — tray → Speech model to change.",
             model.tray_summary(),
-            ort_accelerator_summary(model, self.config.directml)
+            ort_accelerator_summary(model, self.config.directml, self.config.xnnpack),
+            self.config.asr_thread_count()
         );
         if self.config.directml && !model.compatible_with_directml() {
             eprintln!(
@@ -197,9 +198,8 @@ impl AppRuntime {
     }
 
     fn handle_set_asr_model(&mut self, key: &str) -> Result<(), RuntimeError> {
-        let model = AsrModelId::parse(key).ok_or_else(|| {
-            RuntimeError::Message(format!("unknown speech model: {key}"))
-        })?;
+        let model = AsrModelId::parse(key)
+            .ok_or_else(|| RuntimeError::Message(format!("unknown speech model: {key}")))?;
 
         if self.config.asr_model() == model {
             info!("Speech model already {}", model.config_key());
@@ -207,7 +207,9 @@ impl AppRuntime {
         }
 
         self.config.set_asr_model(model);
-        self.config.save().map_err(|e| RuntimeError::Message(e.to_string()))?;
+        self.config
+            .save()
+            .map_err(|e| RuntimeError::Message(e.to_string()))?;
         self.asr
             .reload(model)
             .map_err(|e| RuntimeError::Message(e.to_string()))?;
@@ -228,15 +230,16 @@ impl AppRuntime {
                 return Ok(());
             }
             self.config.set_grammar_enabled(false);
-            self.config.save().map_err(|e| RuntimeError::Message(e.to_string()))?;
+            self.config
+                .save()
+                .map_err(|e| RuntimeError::Message(e.to_string()))?;
             eprintln!("Grammar correction disabled.");
             info!("Grammar correction disabled");
             return Ok(());
         }
 
-        let model = GrammarModelId::parse(&key).ok_or_else(|| {
-            RuntimeError::Message(format!("unknown grammar profile: {key}"))
-        })?;
+        let model = GrammarModelId::parse(&key)
+            .ok_or_else(|| RuntimeError::Message(format!("unknown grammar profile: {key}")))?;
 
         let unchanged = self.config.grammar_enabled() && self.config.grammar_model() == model;
         if unchanged {
@@ -246,7 +249,9 @@ impl AppRuntime {
 
         self.config.set_grammar_enabled(true);
         self.config.set_grammar_model(model);
-        self.config.save().map_err(|e| RuntimeError::Message(e.to_string()))?;
+        self.config
+            .save()
+            .map_err(|e| RuntimeError::Message(e.to_string()))?;
         self.grammar
             .reload(model)
             .map_err(|e| RuntimeError::Message(e.to_string()))?;
@@ -442,9 +447,8 @@ impl AppRuntime {
         let post_ms = post_start.elapsed().as_millis();
 
         if text.is_empty() {
-            return self.fail_processing(&format!(
-                "empty transcript after cleanup (raw was {raw:?})"
-            ));
+            return self
+                .fail_processing(&format!("empty transcript after cleanup (raw was {raw:?})"));
         }
 
         info!("Transcript: {text:?}");
@@ -463,12 +467,7 @@ impl AppRuntime {
         let total_ms = pipeline_start.elapsed().as_millis();
         info!(
             capture_ms,
-            prep_ms,
-            asr_ms,
-            post_ms,
-            deliver_ms,
-            total_ms,
-            "Dictation pipeline timing"
+            prep_ms, asr_ms, post_ms, deliver_ms, total_ms, "Dictation pipeline timing"
         );
 
         self.state
@@ -477,8 +476,9 @@ impl AppRuntime {
         self.sync_ui();
         match outcome {
             DeliveryOutcome::Injected | DeliveryOutcome::PastedViaClipboard => {
+                let rt_speedup = trimmed_audio_ms as f64 / asr_ms.max(1) as f64;
                 eprintln!(
-                    "Transcript pasted ({total_ms} ms: capture {capture_ms}, ASR {asr_ms}, paste {deliver_ms}; audio {trimmed_audio_ms} ms)."
+                    "Transcript pasted ({total_ms} ms: capture {capture_ms}, ASR {asr_ms} ({rt_speedup:.1}x RT), paste {deliver_ms}; audio {trimmed_audio_ms} ms)."
                 );
             }
             DeliveryOutcome::CopiedToClipboard | DeliveryOutcome::SavedOnly => {}

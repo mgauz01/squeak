@@ -69,7 +69,10 @@ fn make_vk_key(
     }
 }
 
-fn make_unicode_key(ch: char, flags: windows::Win32::UI::Input::KeyboardAndMouse::KEYBD_EVENT_FLAGS) -> INPUT {
+fn make_unicode_key(
+    ch: char,
+    flags: windows::Win32::UI::Input::KeyboardAndMouse::KEYBD_EVENT_FLAGS,
+) -> INPUT {
     INPUT {
         r#type: windows::Win32::UI::Input::KeyboardAndMouse::INPUT_KEYBOARD,
         Anonymous: INPUT_0 {

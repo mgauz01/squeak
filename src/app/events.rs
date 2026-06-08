@@ -29,14 +29,18 @@ pub enum UserAction {
 pub enum AppEvent {
     ArmRecording,
     DisarmRecording,
-    StartRecording { mode: RecordingMode },
+    StartRecording {
+        mode: RecordingMode,
+    },
     StopRecording,
     CancelRecording,
     TranscriptReady {
         text: String,
         target: DeliveryTarget,
     },
-    ProcessingFailed { message: String },
+    ProcessingFailed {
+        message: String,
+    },
     DeliveryComplete,
     DeliveryBuffered,
     DismissError,

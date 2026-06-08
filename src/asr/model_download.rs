@@ -4,9 +4,7 @@ use std::path::Path;
 
 use crate::config::{AsrModelId, ModelTier};
 
-pub use crate::asr::provision::{
-    ensure_model, model_dir, DownloadProgress, REQUIRED_MODEL_FILES,
-};
+pub use crate::asr::provision::{ensure_model, model_dir, DownloadProgress, REQUIRED_MODEL_FILES};
 
 pub fn model_is_complete(model: AsrModelId, dir: &Path) -> bool {
     crate::asr::provision::model_is_complete(model, dir)

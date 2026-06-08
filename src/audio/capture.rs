@@ -40,7 +40,9 @@ impl AudioCapture {
         Self::try_new_with_meter(None)
     }
 
-    pub fn try_new_with_meter(level_meter: Option<Arc<AudioLevelMeter>>) -> Result<Self, AudioError> {
+    pub fn try_new_with_meter(
+        level_meter: Option<Arc<AudioLevelMeter>>,
+    ) -> Result<Self, AudioError> {
         let host = cpal::default_host();
         let device = host
             .default_input_device()
@@ -121,9 +123,7 @@ impl AudioCapture {
             }
         };
 
-        stream
-            .play()
-            .map_err(|_| AudioError::PermissionDenied)?;
+        stream.play().map_err(|_| AudioError::PermissionDenied)?;
         self.stream = Some(stream);
         Ok(())
     }

@@ -4,18 +4,16 @@
 //! `transcribe-rs`). Partial tail chunks crash the Conv node unless padded to
 //! 1280 with silence before inference.
 use std::path::Path;
-use std::thread;
 
 use tracing::{info, warn};
 use transcribe_rs::onnx::moonshine::StreamingModel;
 use transcribe_rs::onnx::Quantization;
 use transcribe_rs::{SpeechModel, TranscribeOptions};
 
-use crate::asr::engine::{AsrEngine, AsrError};
+use crate::asr::engine::{recommended_thread_count, AsrEngine, AsrError};
 use crate::asr::provision::{model_dir, model_is_complete};
 use crate::config::{AsrModelId, ModelTier};
 
-const DEFAULT_THREADS: usize = 4;
 /// Moonshine streaming frontend processes fixed 1280-sample chunks (transcribe-rs).
 const STREAMING_CHUNK_SAMPLES: usize = 1280;
 
@@ -48,11 +46,7 @@ impl MoonshineEngine {
         let inner = StreamingModel::load(dir, threads, &Quantization::default())
             .map_err(|e| AsrError::Transcription(e.to_string()))?;
 
-        Ok(Self {
-            inner,
-            tier,
-            model,
-        })
+        Ok(Self { inner, tier, model })
     }
 
     pub fn tier(&self) -> ModelTier {
@@ -149,12 +143,21 @@ mod tests {
     }
 }
 
-/// Apply ORT accelerator preference immediately before loading a model session.
-pub fn configure_ort_accelerator_for_model(model: AsrModelId, prefer_directml: bool) {
-    use transcribe_rs::{set_ort_accelerator, OrtAccelerator};
+/// Configure ORT execution provider and CPU thread budget before loading ONNX sessions.
+///
+/// Microsoft's ORT prebuilds use OpenMP, so Parakeet/Cohere/Canary benefit from
+/// `OMP_NUM_THREADS` even though their sessions are created without `with_intra_threads`.
+pub fn configure_ort_runtime(
+    model: AsrModelId,
+    prefer_directml: bool,
+    threads: usize,
+    use_xnnpack: bool,
+) {
+    let threads = threads.max(1);
+    // SAFETY: called on the ASR worker thread before any ORT sessions exist.
+    unsafe { std::env::set_var("OMP_NUM_THREADS", threads.to_string()) };
 
     let use_directml = prefer_directml && model.compatible_with_directml();
-
     if prefer_directml && !model.compatible_with_directml() {
         warn!(
             "DirectML is not compatible with {} (ONNX Slice ops fail on DML); using CPU",
@@ -165,24 +168,54 @@ pub fn configure_ort_accelerator_for_model(model: AsrModelId, prefer_directml: b
     if use_directml {
         #[cfg(feature = "directml")]
         {
+            use transcribe_rs::{set_ort_accelerator, OrtAccelerator};
             set_ort_accelerator(OrtAccelerator::DirectMl);
-            info!("ORT accelerator for {}: DirectML", model.config_key());
+            info!(
+                "ORT accelerator for {}: DirectML ({} threads)",
+                model.config_key(),
+                threads
+            );
             return;
         }
         #[cfg(not(feature = "directml"))]
         warn!("DirectML requested but squeak was built without `directml` feature; using CPU");
     }
 
+    #[cfg(feature = "xnnpack")]
+    if use_xnnpack {
+        use transcribe_rs::{set_ort_accelerator, OrtAccelerator};
+        set_ort_accelerator(OrtAccelerator::Xnnpack);
+        info!(
+            "ORT accelerator for {}: XNNPACK ({} threads)",
+            model.config_key(),
+            threads
+        );
+        return;
+    }
+
+    use transcribe_rs::{set_ort_accelerator, OrtAccelerator};
     set_ort_accelerator(OrtAccelerator::CpuOnly);
-    info!("ORT accelerator for {}: CPU", model.config_key());
+    info!(
+        "ORT accelerator for {}: CPU ({} threads)",
+        model.config_key(),
+        threads
+    );
 }
 
-pub fn ort_accelerator_summary(model: AsrModelId, prefer_directml: bool) -> &'static str {
+pub fn ort_accelerator_summary(
+    model: AsrModelId,
+    prefer_directml: bool,
+    use_xnnpack: bool,
+) -> &'static str {
     if prefer_directml && model.compatible_with_directml() {
         #[cfg(feature = "directml")]
         {
             return "DirectML";
         }
+    }
+    #[cfg(feature = "xnnpack")]
+    if use_xnnpack {
+        return "XNNPACK";
     }
     "CPU"
 }
@@ -197,9 +230,3 @@ pub fn is_likely_directml_inference_error(message: &str) -> bool {
         || (lower.contains("slice") && lower.contains("inference"))
 }
 
-pub fn recommended_thread_count() -> usize {
-    thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(DEFAULT_THREADS)
-        .clamp(1, 8)
-}

@@ -3,7 +3,9 @@ use std::path::Path;
 use tracing::info;
 
 use crate::postprocess::grammar::engine::ModelDownloadError;
-use crate::postprocess::grammar::provision::{download_hf_files, is_complete_dir, DownloadProgress};
+use crate::postprocess::grammar::provision::{
+    download_hf_files, is_complete_dir, DownloadProgress,
+};
 
 const HF_REPO: &str = "rabden/t5-tiny-gec-hone";
 

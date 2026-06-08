@@ -1,4 +1,16 @@
+use std::thread;
+
 use thiserror::Error;
+
+const DEFAULT_ASR_THREADS: usize = 4;
+
+/// Logical cores to use for ONNX/OpenMP inference (Parakeet honors `OMP_NUM_THREADS`).
+pub fn recommended_thread_count() -> usize {
+    thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(DEFAULT_ASR_THREADS)
+        .clamp(1, 8)
+}
 
 #[derive(Debug, Error)]
 pub enum AsrError {
@@ -105,16 +117,22 @@ mod tests {
     #[test]
     fn mock_rejects_empty_audio() {
         let mut engine = MockAsrEngine::new("x");
-        assert!(matches!(
-            engine.transcribe(&[]),
-            Err(AsrError::EmptyAudio)
-        ));
+        assert!(matches!(engine.transcribe(&[]), Err(AsrError::EmptyAudio)));
     }
 
     #[test]
     fn mock_not_loaded_errors() {
         let mut engine = MockAsrEngine::unloaded();
-        assert!(matches!(engine.transcribe(&[1.0]), Err(AsrError::NotLoaded)));
+        assert!(matches!(
+            engine.transcribe(&[1.0]),
+            Err(AsrError::NotLoaded)
+        ));
+    }
+
+    #[test]
+    fn recommended_threads_in_sane_range() {
+        let n = recommended_thread_count();
+        assert!((1..=8).contains(&n));
     }
 
     #[test]

@@ -30,10 +30,11 @@ path = "examples/gec_bench.rs"
 required-features = ["gec-tiny", "gec-coedit"]
 
 [features]
-default = ["parakeet"]
+default = ["parakeet", "xnnpack"]
 parakeet = []
 cohere = []
 canary = []
+xnnpack = ["transcribe-rs/ort-xnnpack"]
 gec-tiny = ["dep:ort", "dep:tokenizers", "dep:ndarray"]
 gec-coedit = ["dep:ort", "dep:tokenizers", "dep:ndarray"]
 gec-llama = []

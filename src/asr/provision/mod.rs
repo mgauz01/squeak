@@ -21,10 +21,7 @@ pub use moonshine::REQUIRED_MODEL_FILES;
 #[derive(Debug, Clone)]
 pub enum DownloadProgress {
     Starting { model: AsrModelId },
-    Downloading {
-        downloaded: u64,
-        total: Option<u64>,
-    },
+    Downloading { downloaded: u64, total: Option<u64> },
     Extracting,
     Complete,
 }
@@ -61,9 +58,11 @@ pub fn ensure_model(
         return Ok(target);
     }
 
-    let url = model.download_url().ok_or(ModelDownloadError::Http(
-        format!("no download URL for {model:?}"),
-    ))?;
+    let url = model
+        .download_url()
+        .ok_or(ModelDownloadError::Http(format!(
+            "no download URL for {model:?}"
+        )))?;
 
     progress(DownloadProgress::Starting { model });
 

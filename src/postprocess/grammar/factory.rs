@@ -3,12 +3,12 @@ use std::path::Path;
 use crate::config::GrammarModelId;
 use crate::postprocess::grammar::engine::{GrammarError, GrammarPolisher};
 
-#[cfg(feature = "gec-tiny")]
-use crate::postprocess::grammar::tiny_t5::TinyT5Polisher;
 #[cfg(feature = "gec-coedit")]
 use crate::postprocess::grammar::coedit::CoeditPolisher;
 #[cfg(feature = "gec-llama")]
 use crate::postprocess::grammar::llama::LlamaGrammarPolisher;
+#[cfg(feature = "gec-tiny")]
+use crate::postprocess::grammar::tiny_t5::TinyT5Polisher;
 
 pub fn create_polisher(
     model: GrammarModelId,

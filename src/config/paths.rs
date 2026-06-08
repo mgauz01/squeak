@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
-use super::model::{AsrModelId, ModelTier};
 use super::grammar::GrammarModelId;
+use super::model::{AsrModelId, ModelTier};
 
 pub fn config_dir() -> PathBuf {
     config_base().join("Squeak")
@@ -26,9 +26,7 @@ fn config_base() -> PathBuf {
     {
         std::env::var("XDG_CONFIG_HOME")
             .map(PathBuf::from)
-            .or_else(|_| {
-                std::env::var("HOME").map(|home| PathBuf::from(home).join(".config"))
-            })
+            .or_else(|_| std::env::var("HOME").map(|home| PathBuf::from(home).join(".config")))
             .unwrap_or_else(|_| PathBuf::from("."))
     }
 }
@@ -44,9 +42,7 @@ fn data_local_base() -> PathBuf {
     {
         std::env::var("XDG_DATA_HOME")
             .map(PathBuf::from)
-            .or_else(|_| {
-                std::env::var("HOME").map(|home| PathBuf::from(home).join(".local/share"))
-            })
+            .or_else(|_| std::env::var("HOME").map(|home| PathBuf::from(home).join(".local/share")))
             .unwrap_or_else(|_| PathBuf::from("."))
     }
 }

@@ -5,11 +5,12 @@ use std::thread::{self, JoinHandle};
 use crossbeam_channel::{Receiver, Sender};
 use tracing::{info, warn};
 
+use crate::app::AppEvent;
 use crate::asr::engine::{AsrEngine, AsrError};
 use crate::asr::factory::create_engine;
+use crate::asr::engine::recommended_thread_count;
+use crate::asr::moonshine::{configure_ort_runtime, is_likely_directml_inference_error};
 use crate::asr::provision::{ensure_model, DownloadProgress};
-use crate::asr::moonshine::{configure_ort_accelerator_for_model, is_likely_directml_inference_error};
-use crate::app::AppEvent;
 use crate::config::AsrModelId;
 
 enum WorkerCommand {
@@ -31,6 +32,34 @@ enum WorkerCommand {
     Shutdown,
 }
 
+/// CPU/ORT settings for the background ASR worker.
+#[derive(Debug, Clone, Copy)]
+pub struct AsrWorkerConfig {
+    pub directml: bool,
+    pub threads: usize,
+    pub xnnpack: bool,
+}
+
+impl AsrWorkerConfig {
+    pub fn from_app_config(config: &crate::config::Config) -> Self {
+        Self {
+            directml: config.directml,
+            threads: config.asr_thread_count(),
+            xnnpack: config.xnnpack,
+        }
+    }
+}
+
+impl Default for AsrWorkerConfig {
+    fn default() -> Self {
+        Self {
+            directml: false,
+            threads: recommended_thread_count(),
+            xnnpack: cfg!(feature = "xnnpack"),
+        }
+    }
+}
+
 /// Handle to the background ASR worker (owns loaded engine on a dedicated thread).
 pub struct AsrWorker {
     tx: Sender<WorkerCommand>,
@@ -39,14 +68,14 @@ pub struct AsrWorker {
 }
 
 impl AsrWorker {
-    pub fn spawn(use_directml: bool) -> Self {
+    pub fn spawn(config: AsrWorkerConfig) -> Self {
         let (tx, rx) = crossbeam_channel::unbounded();
         let downloading = Arc::new(AtomicBool::new(false));
         let downloading_flag = Arc::clone(&downloading);
 
         let handle = thread::Builder::new()
             .name("squeak-asr".into())
-            .spawn(move || worker_main(rx, downloading_flag, use_directml))
+            .spawn(move || worker_main(rx, downloading_flag, config))
             .expect("failed to spawn ASR worker thread");
 
         Self {
@@ -60,11 +89,7 @@ impl AsrWorker {
         self.downloading.load(Ordering::Relaxed)
     }
 
-    pub fn preload_in_background(
-        &self,
-        model: AsrModelId,
-        notify: Option<Sender<AppEvent>>,
-    ) {
+    pub fn preload_in_background(&self, model: AsrModelId, notify: Option<Sender<AppEvent>>) {
         if self.is_ready(model) {
             if let Some(tx) = notify {
                 let _ = tx.send(AppEvent::AsrModelReady);
@@ -84,17 +109,15 @@ impl AsrWorker {
         }
         thread::Builder::new()
             .name("squeak-asr-preload".into())
-            .spawn(move || {
-                match reply_rx.recv() {
-                    Ok(Ok(())) => {
-                        eprintln!("Speech model ready.");
-                        if let Some(tx) = notify {
-                            let _ = tx.send(AppEvent::AsrModelReady);
-                        }
+            .spawn(move || match reply_rx.recv() {
+                Ok(Ok(())) => {
+                    eprintln!("Speech model ready.");
+                    if let Some(tx) = notify {
+                        let _ = tx.send(AppEvent::AsrModelReady);
                     }
-                    Ok(Err(err)) => eprintln!("Speech model load failed: {err}"),
-                    Err(_) => eprintln!("Speech model load interrupted."),
                 }
+                Ok(Err(err)) => eprintln!("Speech model load failed: {err}"),
+                Err(_) => eprintln!("Speech model load interrupted."),
             })
             .ok();
     }
@@ -152,17 +175,17 @@ impl Drop for AsrWorker {
 struct WorkerState {
     loaded: Option<AsrModelId>,
     engine: Option<Box<dyn AsrEngine>>,
-    prefer_directml: bool,
+    ort: AsrWorkerConfig,
     /// After a DirectML inference failure, stay on CPU for the rest of this session.
     force_cpu: bool,
     loaded_on_directml: bool,
 }
 
-fn worker_main(rx: Receiver<WorkerCommand>, downloading: Arc<AtomicBool>, prefer_directml: bool) {
+fn worker_main(rx: Receiver<WorkerCommand>, downloading: Arc<AtomicBool>, ort: AsrWorkerConfig) {
     let mut state = WorkerState {
         loaded: None,
         engine: None,
-        prefer_directml,
+        ort,
         force_cpu: false,
         loaded_on_directml: false,
     };
@@ -210,10 +233,9 @@ fn ensure_ready(
         DownloadProgress::Starting { model } => {
             info!("Downloading speech model: {}", model.config_key())
         }
-        DownloadProgress::Downloading {
-            downloaded,
-            total,
-        } => info!("Model download: {downloaded} / {:?}", total),
+        DownloadProgress::Downloading { downloaded, total } => {
+            info!("Model download: {downloaded} / {:?}", total)
+        }
         DownloadProgress::Extracting => info!("Extracting model archive"),
         DownloadProgress::Complete => info!("Model download complete"),
     });
@@ -226,7 +248,7 @@ fn ensure_ready(
 }
 
 fn use_directml(state: &WorkerState, model: AsrModelId) -> bool {
-    state.prefer_directml
+    state.ort.directml
         && !state.force_cpu
         && model.compatible_with_directml()
         && cfg!(feature = "directml")
@@ -238,12 +260,34 @@ fn load_engine(
     dir: &std::path::Path,
 ) -> Result<(), AsrError> {
     let on_directml = use_directml(state, model);
-    configure_ort_accelerator_for_model(model, on_directml);
+    configure_ort_runtime(
+        model,
+        on_directml,
+        state.ort.threads,
+        state.ort.xnnpack && !on_directml,
+    );
     state.loaded_on_directml = on_directml;
     state.engine = Some(create_engine(model, dir)?);
     state.loaded = Some(model);
+    warmup_engine(state);
     info!("Speech model warm-loaded: {}", model.config_key());
     Ok(())
+}
+
+/// Prime ONNX graphs so the first real dictation is not paying cold-start cost.
+fn warmup_engine(state: &mut WorkerState) {
+    const WARMUP_SAMPLES: usize = 16_000;
+    let samples = vec![0.0f32; WARMUP_SAMPLES];
+    let Some(engine) = state.engine.as_mut() else {
+        return;
+    };
+    match engine.transcribe(&samples) {
+        Ok(_) => info!("ASR warmup complete"),
+        Err(AsrError::EmptyAudio) | Err(AsrError::AudioTooShort { .. }) => {
+            info!("ASR warmup complete (short/silent clip)");
+        }
+        Err(err) => warn!("ASR warmup failed (non-fatal): {err}"),
+    }
 }
 
 fn transcribe_loaded(
@@ -310,10 +354,17 @@ mod tests {
         let state = WorkerState {
             loaded: None,
             engine: None,
-            prefer_directml: true,
+            ort: AsrWorkerConfig {
+                directml: true,
+                threads: 4,
+                xnnpack: false,
+            },
             force_cpu: true,
             loaded_on_directml: false,
         };
-        assert!(!use_directml(&state, AsrModelId::moonshine(crate::config::ModelTier::Small)));
+        assert!(!use_directml(
+            &state,
+            AsrModelId::moonshine(crate::config::ModelTier::Small)
+        ));
     }
 }

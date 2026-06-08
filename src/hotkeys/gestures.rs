@@ -64,7 +64,10 @@ impl GestureFsm {
     }
 
     pub fn on_tick(&mut self, now_ms: u64) -> GestureOutput {
-        if let Phase::AwaitingSecondTap { first_release_ms, .. } = self.phase {
+        if let Phase::AwaitingSecondTap {
+            first_release_ms, ..
+        } = self.phase
+        {
             if now_ms.saturating_sub(first_release_ms) > self.double_tap_window_ms {
                 self.phase = Phase::Idle;
             }
@@ -72,9 +75,7 @@ impl GestureFsm {
         }
 
         if let Phase::ComboHeld { since_ms, .. } = self.phase {
-            if self.combo_active()
-                && now_ms.saturating_sub(since_ms) >= self.ptt_min_hold_ms
-            {
+            if self.combo_active() && now_ms.saturating_sub(since_ms) >= self.ptt_min_hold_ms {
                 self.phase = Phase::PushToTalk;
                 return GestureOutput::StartPushToTalk;
             }
@@ -169,9 +170,7 @@ impl GestureFsm {
                 self.phase = Phase::Idle;
                 GestureOutput::StopPushToTalk
             }
-            Phase::Idle | Phase::AwaitingSecondTap { .. } | Phase::HandsFree => {
-                GestureOutput::None
-            }
+            Phase::Idle | Phase::AwaitingSecondTap { .. } | Phase::HandsFree => GestureOutput::None,
         }
     }
 

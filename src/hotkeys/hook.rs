@@ -10,15 +10,14 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::SystemInformation::GetTickCount64;
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    RegisterHotKey, UnregisterHotKey, VIRTUAL_KEY, MOD_ALT, MOD_SHIFT, VK_CONTROL, VK_LCONTROL,
+    RegisterHotKey, UnregisterHotKey, MOD_ALT, MOD_SHIFT, VIRTUAL_KEY, VK_CONTROL, VK_LCONTROL,
     VK_LWIN, VK_RCONTROL, VK_RWIN,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW,
-    PostThreadMessageW, RegisterClassW, SetWindowsHookExW, SetTimer, TranslateMessage,
+    PostThreadMessageW, RegisterClassW, SetTimer, SetWindowsHookExW, TranslateMessage,
     UnhookWindowsHookEx, HC_ACTION, HHOOK, KBDLLHOOKSTRUCT, MSG, WH_KEYBOARD_LL, WM_HOTKEY,
-    WM_KEYDOWN, WM_QUIT, WM_TIMER, WNDCLASSW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
-    WS_OVERLAPPED,
+    WM_KEYDOWN, WM_QUIT, WM_TIMER, WNDCLASSW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_OVERLAPPED,
 };
 
 use crate::app::{AppEvent, RecordingMode, UserAction};
@@ -88,11 +87,7 @@ unsafe fn run_message_loop() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-unsafe extern "system" fn keyboard_proc(
-    code: i32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-) -> LRESULT {
+unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     if code == HC_ACTION as i32 {
         let kb = &*(lparam.0 as *const KBDLLHOOKSTRUCT);
         if let Some(key) = virtual_key_to_gesture_key(kb.vkCode) {

@@ -24,7 +24,9 @@ pub struct StateMachine {
 
 impl Default for StateMachine {
     fn default() -> Self {
-        Self { state: AppState::Idle }
+        Self {
+            state: AppState::Idle,
+        }
     }
 }
 
@@ -52,14 +54,30 @@ fn transition(from: AppState, event: &AppEvent) -> Option<AppState> {
     use AppState::*;
 
     match (from, event) {
-        (Idle, StartRecording { mode: RecordingMode::PushToTalk }) => Some(RecordingPtt),
-        (Idle, StartRecording {
-            mode: RecordingMode::HandsFree,
-        }) => Some(RecordingHandsFree),
-        (Buffered, StartRecording { mode: RecordingMode::PushToTalk }) => Some(RecordingPtt),
-        (Buffered, StartRecording {
-            mode: RecordingMode::HandsFree,
-        }) => Some(RecordingHandsFree),
+        (
+            Idle,
+            StartRecording {
+                mode: RecordingMode::PushToTalk,
+            },
+        ) => Some(RecordingPtt),
+        (
+            Idle,
+            StartRecording {
+                mode: RecordingMode::HandsFree,
+            },
+        ) => Some(RecordingHandsFree),
+        (
+            Buffered,
+            StartRecording {
+                mode: RecordingMode::PushToTalk,
+            },
+        ) => Some(RecordingPtt),
+        (
+            Buffered,
+            StartRecording {
+                mode: RecordingMode::HandsFree,
+            },
+        ) => Some(RecordingHandsFree),
 
         (RecordingPtt, StopRecording) | (RecordingHandsFree, StopRecording) => Some(Processing),
 
@@ -73,10 +91,18 @@ fn transition(from: AppState, event: &AppEvent) -> Option<AppState> {
 
         (Injecting, DeliveryComplete) => Some(Idle),
         (Injecting, DeliveryBuffered) => Some(Buffered),
-        (Injecting, StartRecording { mode: RecordingMode::PushToTalk }) => Some(RecordingPtt),
-        (Injecting, StartRecording {
-            mode: RecordingMode::HandsFree,
-        }) => Some(RecordingHandsFree),
+        (
+            Injecting,
+            StartRecording {
+                mode: RecordingMode::PushToTalk,
+            },
+        ) => Some(RecordingPtt),
+        (
+            Injecting,
+            StartRecording {
+                mode: RecordingMode::HandsFree,
+            },
+        ) => Some(RecordingHandsFree),
 
         (Buffered, DeliveryComplete) | (Buffered, DismissError) => Some(Idle),
 

@@ -4,15 +4,21 @@ use std::path::Path;
 #[cfg(all(windows, feature = "parakeet"))]
 use tracing::info;
 #[cfg(all(windows, feature = "parakeet"))]
-use transcribe_rs::onnx::parakeet::{ParakeetModel, ParakeetParams};
+use transcribe_rs::onnx::parakeet::ParakeetModel;
 #[cfg(all(windows, feature = "parakeet"))]
 use transcribe_rs::onnx::Quantization;
+#[cfg(all(windows, feature = "parakeet"))]
+use transcribe_rs::{SpeechModel, TranscribeOptions};
 
 #[cfg(all(windows, feature = "parakeet"))]
 use crate::asr::engine::{AsrEngine, AsrError};
 #[cfg(all(windows, feature = "parakeet"))]
 use crate::asr::provision::model_is_complete;
 use crate::config::AsrModelId;
+
+/// Leading pad after Squeak trims capture silence — smaller than Parakeet's 250 ms default.
+#[cfg(all(windows, feature = "parakeet"))]
+const LEADING_SILENCE_MS: u32 = 80;
 
 #[cfg(all(windows, feature = "parakeet"))]
 pub struct ParakeetEngine {
@@ -53,7 +59,13 @@ impl AsrEngine for ParakeetEngine {
 
         let result = self
             .inner
-            .transcribe_with(&samples, &ParakeetParams::default())
+            .transcribe(
+                samples,
+                &TranscribeOptions {
+                    leading_silence_ms: Some(LEADING_SILENCE_MS),
+                    ..Default::default()
+                },
+            )
             .map_err(|e| AsrError::Transcription(e.to_string()))?;
 
         Ok(result.text.trim().to_string())

@@ -10,18 +10,17 @@ use windows::core::PCWSTR;
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, CreateCompatibleDC, CreateDIBSection, CreateRoundRectRgn, CreateSolidBrush,
-    DeleteDC, DeleteObject, EndPaint, FillRect, GetDC, GetMonitorInfoW, HRGN, InvalidateRect,
+    DeleteDC, DeleteObject, EndPaint, FillRect, GetDC, GetMonitorInfoW, InvalidateRect,
     MonitorFromPoint, ReleaseDC, RoundRect, SelectClipRgn, SelectObject, AC_SRC_ALPHA, AC_SRC_OVER,
-    BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BLENDFUNCTION, DIB_RGB_COLORS, MONITORINFO,
+    BITMAPINFO, BITMAPINFOHEADER, BI_RGB, BLENDFUNCTION, DIB_RGB_COLORS, HRGN, MONITORINFO,
     MONITOR_DEFAULTTOPRIMARY, PAINTSTRUCT,
 };
 use windows::Win32::System::SystemInformation::GetTickCount64;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DispatchMessageW, GetSystemMetrics, GetWindowLongPtrW,
     GetWindowRect, PeekMessageW, RegisterClassW, SetTimer, SetWindowLongPtrW, SetWindowPos,
-    ShowWindow, TranslateMessage, UpdateLayeredWindow, GWLP_USERDATA, HWND_TOPMOST, MSG,
-    PM_REMOVE, SM_CXSCREEN, SWP_NOACTIVATE, SWP_SHOWWINDOW, SW_HIDE, SW_SHOW, ULW_ALPHA,
-    WM_DESTROY,
+    ShowWindow, TranslateMessage, UpdateLayeredWindow, GWLP_USERDATA, HWND_TOPMOST, MSG, PM_REMOVE,
+    SM_CXSCREEN, SWP_NOACTIVATE, SWP_SHOWWINDOW, SW_HIDE, SW_SHOW, ULW_ALPHA, WM_DESTROY,
     WM_ERASEBKGND, WM_PAINT, WM_TIMER, WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
     WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
@@ -34,7 +33,15 @@ use crate::overlay_grow::{
 };
 use crate::overlay_raster::apply_pill_alpha_mask;
 use crate::ui_visual::{
-    phase_display_scale, phase_uses_grow_animation, ptt_hold_fraction, ui_phase, UiPhase,
+    lerp_rgb, phase_display_scale, phase_uses_grow_animation, ptt_hold_fraction, scale_rgb,
+    ui_phase, UiPhase,
+};
+
+const LAYERED_BLEND: BLENDFUNCTION = BLENDFUNCTION {
+    BlendOp: AC_SRC_OVER as u8,
+    BlendFlags: 0,
+    SourceConstantAlpha: 255,
+    AlphaFormat: AC_SRC_ALPHA as u8,
 };
 
 const PILL_INSET: i32 = 5;
@@ -193,15 +200,19 @@ fn base_pill_width(state: &OverlayWindowState, now_ms: u64) -> i32 {
 }
 
 fn current_display_scale(state: &OverlayWindowState, now_ms: u64) -> f32 {
-    animated_scale(state.scale_from, state.scale_to, state.scale_start_ms, now_ms)
+    animated_scale(
+        state.scale_from,
+        state.scale_to,
+        state.scale_start_ms,
+        now_ms,
+    )
 }
 
 fn scale_animation_active(state: &OverlayWindowState, now_ms: u64) -> bool {
-    state.scale_start_ms != 0
-        && current_display_scale(state, now_ms) != state.scale_to
+    state.scale_start_ms != 0 && current_display_scale(state, now_ms) != state.scale_to
 }
 
-unsafe fn begin_scale_transition(state: &mut OverlayWindowState, target: f32, now_ms: u64) {
+fn begin_scale_transition(state: &mut OverlayWindowState, target: f32, now_ms: u64) {
     let current = current_display_scale(state, now_ms);
     if (current - target).abs() < f32::EPSILON {
         state.scale_from = target;
@@ -264,15 +275,13 @@ unsafe fn apply_overlay_phase(hwnd: HWND, phase: UiPhase) {
         UiPhase::Hidden => {
             let _ = ShowWindow(hwnd, SW_HIDE);
         }
-        UiPhase::Armed | UiPhase::RecordingPtt | UiPhase::RecordingHandsFree => {
-            if prev == UiPhase::Hidden {
+        UiPhase::Armed
+        | UiPhase::RecordingPtt
+        | UiPhase::RecordingHandsFree
+        | UiPhase::Processing => {
+            if prev == UiPhase::Hidden && phase != UiPhase::Processing {
                 reset_recording_grow(state);
             }
-            let _ = ShowWindow(hwnd, SW_SHOW);
-            update_pill_geometry(hwnd, state);
-            let _ = InvalidateRect(hwnd, None, false);
-        }
-        UiPhase::Processing => {
             let _ = ShowWindow(hwnd, SW_SHOW);
             update_pill_geometry(hwnd, state);
             let _ = InvalidateRect(hwnd, None, false);
@@ -346,9 +355,7 @@ unsafe extern "system" fn overlay_wnd_proc(
         WM_TIMER if wparam.0 == ANIM_TIMER_ID => {
             if let Some(state) = overlay_state_mut(hwnd) {
                 let now = GetTickCount64();
-                if phase_uses_grow_animation(state.phase)
-                    || scale_animation_active(state, now)
-                {
+                if phase_uses_grow_animation(state.phase) || scale_animation_active(state, now) {
                     update_pill_geometry(hwnd, state);
                 }
                 if state.phase != UiPhase::Hidden {
@@ -365,9 +372,32 @@ unsafe extern "system" fn overlay_wnd_proc(
     }
 }
 
+struct LayeredBitmap<'a> {
+    screen_dc: windows::Win32::Graphics::Gdi::HDC,
+    mem_dc: windows::Win32::Graphics::Gdi::HDC,
+    old_bitmap: windows::Win32::Graphics::Gdi::HGDIOBJ,
+    dib: windows::Win32::Graphics::Gdi::HBITMAP,
+    bits: *mut std::ffi::c_void,
+    byte_len: usize,
+    _marker: std::marker::PhantomData<&'a ()>,
+}
+
+impl Drop for LayeredBitmap<'_> {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = SelectObject(self.mem_dc, self.old_bitmap);
+            let _ = DeleteObject(self.dib);
+            let _ = DeleteDC(self.mem_dc);
+            let _ = ReleaseDC(HWND::default(), self.screen_dc);
+        }
+    }
+}
+
 unsafe fn present_layered_overlay(hwnd: HWND) {
     let (width, height) = match overlay_state_mut(hwnd) {
-        Some(state) if state.phase != UiPhase::Hidden => (state.current_width, state.current_height),
+        Some(state) if state.phase != UiPhase::Hidden => {
+            (state.current_width, state.current_height)
+        }
         _ => return,
     };
     if width <= 0 || height <= 0 {
@@ -408,60 +438,50 @@ unsafe fn present_layered_overlay(hwnd: HWND) {
         }
     };
 
-    let old_bitmap = SelectObject(mem_dc, dib);
-    if !bits.is_null() {
-        let byte_len = (width * height * 4) as usize;
-        std::ptr::write_bytes(bits.cast::<u8>(), 0, byte_len);
+    let byte_len = (width * height * 4) as usize;
+    let layer = LayeredBitmap {
+        screen_dc,
+        mem_dc,
+        old_bitmap: SelectObject(mem_dc, dib),
+        dib,
+        bits,
+        byte_len,
+        _marker: std::marker::PhantomData,
+    };
+
+    if !layer.bits.is_null() {
+        std::ptr::write_bytes(layer.bits.cast::<u8>(), 0, layer.byte_len);
     }
 
-    paint_overlay(hwnd, mem_dc, width, height);
+    paint_overlay(hwnd, layer.mem_dc, width, height);
 
-    if !bits.is_null() {
-        let pixels =
-            std::slice::from_raw_parts_mut(bits.cast::<u8>(), (width * height * 4) as usize);
+    if !layer.bits.is_null() {
+        let pixels = std::slice::from_raw_parts_mut(layer.bits.cast::<u8>(), layer.byte_len);
         apply_pill_alpha_mask(pixels, width, height);
     }
 
     let mut window_rect = RECT::default();
     if GetWindowRect(hwnd, &mut window_rect).is_err() {
-        let _ = SelectObject(mem_dc, old_bitmap);
-        let _ = DeleteObject(dib);
-        let _ = DeleteDC(mem_dc);
-        let _ = ReleaseDC(HWND::default(), screen_dc);
         return;
     }
 
-    let pt_dst = POINT {
-        x: window_rect.left,
-        y: window_rect.top,
-    };
-    let pt_src = POINT { x: 0, y: 0 };
-    let size = SIZE {
-        cx: width,
-        cy: height,
-    };
-    let blend = BLENDFUNCTION {
-        BlendOp: AC_SRC_OVER as u8,
-        BlendFlags: 0,
-        SourceConstantAlpha: 255,
-        AlphaFormat: AC_SRC_ALPHA as u8,
-    };
     let _ = UpdateLayeredWindow(
         hwnd,
         None,
-        Some(&pt_dst),
-        Some(&size),
-        mem_dc,
-        Some(&pt_src),
+        Some(&POINT {
+            x: window_rect.left,
+            y: window_rect.top,
+        }),
+        Some(&SIZE {
+            cx: width,
+            cy: height,
+        }),
+        layer.mem_dc,
+        Some(&POINT { x: 0, y: 0 }),
         COLORREF(0),
-        Some(&blend),
+        Some(&LAYERED_BLEND),
         ULW_ALPHA,
     );
-
-    let _ = SelectObject(mem_dc, old_bitmap);
-    let _ = DeleteObject(dib);
-    let _ = DeleteDC(mem_dc);
-    let _ = ReleaseDC(HWND::default(), screen_dc);
 }
 
 fn pill_inset_for_height(height: i32) -> i32 {
@@ -469,19 +489,16 @@ fn pill_inset_for_height(height: i32) -> i32 {
     inset.clamp(2, height / 3)
 }
 
-fn inner_pill_rect(width: i32, height: i32) -> windows::Win32::Foundation::RECT {
+fn inner_pill_geometry(width: i32, height: i32) -> (RECT, i32) {
     let inset = pill_inset_for_height(height);
-    windows::Win32::Foundation::RECT {
+    let inner = RECT {
         left: inset,
         top: inset,
         right: width - inset,
         bottom: height - inset,
-    }
-}
-
-fn inner_pill_radius(width: i32, height: i32) -> i32 {
-    let inset = pill_inset_for_height(height);
-    (pill_corner_for_size(width, height) - inset).max(4)
+    };
+    let inner_r = (pill_corner_for_size(width, height) - inset).max(4);
+    (inner, inner_r)
 }
 
 unsafe fn paint_overlay(
@@ -500,8 +517,7 @@ unsafe fn paint_overlay(
     }
 
     let tick_s = GetTickCount64() as f64 / 1000.0;
-    let inner = inner_pill_rect(width, height);
-    let inner_r = inner_pill_radius(width, height);
+    let (inner, inner_r) = inner_pill_geometry(width, height);
 
     // Convex dome: lighter crown, darker base. Silhouette AA is applied after paint.
     const SHELL_BANDS: i32 = 10;
@@ -591,9 +607,7 @@ fn plasma_rgb(x: f32, y: f32, t: f32, phase: UiPhase) -> (u8, u8, u8) {
         _ => 1.0,
     };
     let tt = t * speed;
-    let v = (x * 4.8 + tt).sin()
-        + (y * 3.6 - tt * 0.7).sin()
-        + ((x + y) * 3.0 + tt * 0.45).sin();
+    let v = (x * 4.8 + tt).sin() + (y * 3.6 - tt * 0.7).sin() + ((x + y) * 3.0 + tt * 0.45).sin();
     let v = ((v + 2.4) / 4.8).clamp(0.0, 1.0);
     let v = v * 0.72 + 0.08;
 
@@ -605,14 +619,6 @@ fn plasma_rgb(x: f32, y: f32, t: f32, phase: UiPhase) -> (u8, u8, u8) {
         lerp_rgb((98, 10, 82), (150, 40, 118), ((v - 0.72) / 0.28).min(1.0))
     };
     scale_rgb(base, brightness)
-}
-
-fn scale_rgb((r, g, b): (u8, u8, u8), factor: f32) -> (u8, u8, u8) {
-    (
-        ((r as f32) * factor).min(255.0) as u8,
-        ((g as f32) * factor).min(255.0) as u8,
-        ((b as f32) * factor).min(255.0) as u8,
-    )
 }
 
 /// Bottom-edge fill showing Win+Ctrl hold progress toward PTT (armed only).
@@ -642,17 +648,11 @@ unsafe fn paint_ptt_hold_bar(
     let _ = DeleteObject(brush);
 }
 
-fn lerp_rgb(a: (u8, u8, u8), b: (u8, u8, u8), t: f32) -> (u8, u8, u8) {
-    let t = t.clamp(0.0, 1.0);
-    (
-        (a.0 as f32 + (b.0 as f32 - a.0 as f32) * t) as u8,
-        (a.1 as f32 + (b.1 as f32 - a.1 as f32) * t) as u8,
-        (a.2 as f32 + (b.2 as f32 - a.2 as f32) * t) as u8,
-    )
-}
-
 /// Soft crown highlight — tapered width follows the pill curve.
-unsafe fn paint_gloss(hdc: windows::Win32::Graphics::Gdi::HDC, inner: windows::Win32::Foundation::RECT) {
+unsafe fn paint_gloss(
+    hdc: windows::Win32::Graphics::Gdi::HDC,
+    inner: windows::Win32::Foundation::RECT,
+) {
     use windows::Win32::Foundation::RECT;
 
     const GLOSS_ROWS: i32 = 4;
@@ -697,9 +697,7 @@ unsafe fn paint_volume_bars(
         meter.bar_levels()
     } else {
         // Processing: gentle decay of last captured levels.
-        meter
-            .bar_levels()
-            .map(|l| (l * 0.55).max(0.08))
+        meter.bar_levels().map(|l| (l * 0.55).max(0.08))
     };
 
     for (i, level) in levels.iter().enumerate() {

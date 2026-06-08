@@ -60,12 +60,7 @@ fn append_model_item(
     active: AsrModelId,
     model_ids: &mut Vec<(muda::MenuId, AsrModelId)>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let item = CheckMenuItem::new(
-        model.menu_label(),
-        true,
-        model == active,
-        None,
-    );
+    let item = CheckMenuItem::new(model.menu_label(), true, model == active, None);
     model_ids.push((item.id().clone(), model));
     menu.append(&item)?;
     Ok(())
@@ -196,9 +191,9 @@ fn run_tray(
             }
             for (id, key) in &grammar_ids {
                 if *id == event.id() {
-                    let _ = event_tx_menu.send(AppEvent::UserAction(UserAction::SetGrammarProfile(
-                        key.clone(),
-                    )));
+                    let _ = event_tx_menu.send(AppEvent::UserAction(
+                        UserAction::SetGrammarProfile(key.clone()),
+                    ));
                     eprintln!("Switching grammar profile to {key}…");
                     return;
                 }

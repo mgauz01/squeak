@@ -48,20 +48,20 @@ pub fn capsule_coverage(px: i32, py: i32, width: i32, height: i32) -> f32 {
 
 /// Apply premultiplied BGRA alpha mask (Windows 32-bpp DIB byte order).
 pub fn apply_pill_alpha_mask(pixels: &mut [u8], width: i32, height: i32) {
-    let w = width.max(0);
-    let h = height.max(0);
+    let w = width.max(0) as usize;
+    let h = height.max(0) as usize;
+    let byte_len = w * h * 4;
+    if pixels.len() < byte_len {
+        return;
+    }
     for y in 0..h {
         for x in 0..w {
-            let cov = capsule_coverage(x, y, w, h);
-            let i = ((y * w + x) * 4) as usize;
-            if i + 3 >= pixels.len() {
-                return;
-            }
-            let a = (cov * 255.0).round() as u8;
+            let cov = capsule_coverage(x as i32, y as i32, width, height);
+            let i = (y * w + x) * 4;
             pixels[i] = (pixels[i] as f32 * cov).round() as u8;
             pixels[i + 1] = (pixels[i + 1] as f32 * cov).round() as u8;
             pixels[i + 2] = (pixels[i + 2] as f32 * cov).round() as u8;
-            pixels[i + 3] = a;
+            pixels[i + 3] = (cov * 255.0).round() as u8;
         }
     }
 }

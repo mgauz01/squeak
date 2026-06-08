@@ -27,12 +27,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
 
-    let wav_path = env::args()
-        .nth(1)
-        .ok_or(
-            "usage: asr_smoke <path-to-16khz-mono.wav>\n\
+    let wav_path = env::args().nth(1).ok_or(
+        "usage: asr_smoke <path-to-16khz-mono.wav>\n\
              example: cargo run --example asr_smoke --release -- C:\\Users\\you\\recording.wav",
-        )?;
+    )?;
 
     let wav = Path::new(&wav_path);
     if !wav.is_file() {
@@ -44,7 +42,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let config = squeak::config::Config::load();
-    let worker = squeak::asr::AsrWorker::spawn(config.directml);
+    let worker =
+        squeak::asr::AsrWorker::spawn(squeak::asr::AsrWorkerConfig::from_app_config(&config));
 
     println!("Ensuring model ({})...", config.asr_model().config_key());
     worker.ensure_ready(config.asr_model())?;

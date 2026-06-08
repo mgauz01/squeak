@@ -34,12 +34,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         .init();
 
     let mut args = env::args().skip(1);
-    let wav_path = args
-        .next()
-        .ok_or(
-            "usage: asr_bench <16khz-mono.wav> [--models moonshine:small,parakeet]\n\
+    let wav_path = args.next().ok_or(
+        "usage: asr_bench <16khz-mono.wav> [--models moonshine:small,parakeet]\n\
              legacy:   asr_bench clip.wav --tiers tiny,small,medium",
-        )?;
+    )?;
 
     let models = parse_models(args.next().as_deref())?;
     let wav = Path::new(&wav_path);
@@ -57,7 +55,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     println!("---");
 
     let config = squeak::config::Config::load();
-    let worker = AsrWorker::spawn(config.directml);
+    let worker = AsrWorker::spawn(squeak::asr::AsrWorkerConfig::from_app_config(&config));
 
     for model in models {
         println!("Model: {}", model.config_key());

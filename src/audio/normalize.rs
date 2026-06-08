@@ -19,10 +19,7 @@ pub struct AudioStats {
 }
 
 pub fn analyze(samples: &[f32]) -> AudioStats {
-    let peak = samples
-        .iter()
-        .map(|s| s.abs())
-        .fold(0.0f32, f32::max);
+    let peak = samples.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
     let rms = if samples.is_empty() {
         0.0
     } else {
@@ -66,10 +63,7 @@ pub fn peak_normalize(samples: &mut [f32]) -> AudioStats {
         }
     }
 
-    stats.normalized_peak = samples
-        .iter()
-        .map(|s| s.abs())
-        .fold(0.0f32, f32::max);
+    stats.normalized_peak = samples.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
     stats
 }
 

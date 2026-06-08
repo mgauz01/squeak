@@ -6,8 +6,8 @@ pub mod config;
 pub mod hotkeys;
 pub mod overlay_grow;
 pub mod overlay_raster;
-pub mod ui_visual;
 pub mod postprocess;
+pub mod ui_visual;
 
 #[cfg(windows)]
 pub mod audio;
