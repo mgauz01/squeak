@@ -202,7 +202,7 @@ fn run_tray(
 
         info!("Tray icon ready");
         eprintln!(
-            "Squeak is in the system tray (purple pill icon). Dictation shows a pill at the top of the screen."
+            "Squeak is in the system tray (purple pill icon). Dictation shows a pill at the bottom center of the screen."
         );
         eprintln!(
             "Speech model: {} (default Small). Use tray → Speech model to change.",

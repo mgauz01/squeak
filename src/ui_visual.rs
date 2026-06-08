@@ -64,7 +64,7 @@ pub fn phase_uses_grow_animation(phase: UiPhase) -> bool {
 /// Armed / waiting: 40% smaller than active recording or processing.
 pub const PILL_INACTIVE_SCALE: f32 = 0.6;
 
-/// Visual scale for the top-center pill (width + height).
+/// Visual scale for the bottom-center pill (width + height).
 pub fn phase_display_scale(phase: UiPhase) -> f32 {
     if matches!(phase, UiPhase::Armed) {
         PILL_INACTIVE_SCALE

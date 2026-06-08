@@ -20,7 +20,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DispatchMessageW, GetSystemMetrics, GetWindowLongPtrW,
     GetWindowRect, PeekMessageW, RegisterClassW, SetTimer, SetWindowLongPtrW, SetWindowPos,
     ShowWindow, TranslateMessage, UpdateLayeredWindow, GWLP_USERDATA, HWND_TOPMOST, MSG, PM_REMOVE,
-    SM_CXSCREEN, SWP_NOACTIVATE, SWP_SHOWWINDOW, SW_HIDE, SW_SHOW, ULW_ALPHA, WM_DESTROY,
+    SM_CXSCREEN, SM_CYSCREEN, SWP_NOACTIVATE, SWP_SHOWWINDOW, SW_HIDE, SW_SHOW, ULW_ALPHA,
+    WM_DESTROY,
     WM_ERASEBKGND, WM_PAINT, WM_TIMER, WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
     WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
@@ -45,7 +46,8 @@ const LAYERED_BLEND: BLENDFUNCTION = BLENDFUNCTION {
 };
 
 const PILL_INSET: i32 = 5;
-const OVERLAY_TOP_MARGIN: i32 = 16;
+/// Gap above the taskbar within the monitor work area (Wispr Flow–style bottom dock).
+const OVERLAY_BOTTOM_MARGIN: i32 = 16;
 const ANIM_TIMER_ID: usize = 1;
 const ANIM_MS: u32 = 50;
 const PLASMA_STRIPS: i32 = 24;
@@ -60,7 +62,8 @@ struct OverlayWindowState {
     phase: UiPhase,
     meter: Arc<AudioLevelMeter>,
     anchor_center_x: i32,
-    anchor_y: i32,
+    /// Bottom edge of the pill sits this many px above `rcWork.bottom`.
+    anchor_bottom_y: i32,
     grow_start_ms: u64,
     asr_ready: bool,
     asr_ready_ms: Option<u64>,
@@ -114,14 +117,14 @@ unsafe fn run_overlay(
     };
     RegisterClassW(&wc);
 
-    let (anchor_center_x, anchor_y) = primary_monitor_anchor();
+    let (anchor_center_x, anchor_bottom_y) = primary_monitor_anchor();
     let hwnd = CreateWindowExW(
         WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
         PCWSTR(class_name.as_ptr()),
         PCWSTR::null(),
         WS_POPUP,
         anchor_center_x - PILL_MIN_WIDTH / 2,
-        anchor_y,
+        anchor_bottom_y - OVERLAY_HEIGHT,
         PILL_MIN_WIDTH,
         OVERLAY_HEIGHT,
         HWND::default(),
@@ -134,7 +137,7 @@ unsafe fn run_overlay(
         phase: UiPhase::Hidden,
         meter,
         anchor_center_x,
-        anchor_y,
+        anchor_bottom_y,
         grow_start_ms: 0,
         asr_ready: false,
         asr_ready_ms: None,
@@ -152,7 +155,7 @@ unsafe fn run_overlay(
     }
 
     info!("Recording overlay ready");
-    eprintln!("When you dictate, a pill indicator appears at the top center of your screen.");
+    eprintln!("When you dictate, a pill indicator appears at the bottom center of your screen.");
 
     let mut msg = MSG::default();
     while running.load(Ordering::Relaxed) {
@@ -240,11 +243,12 @@ unsafe fn update_pill_geometry(hwnd: HWND, state: &mut OverlayWindowState) {
         state.current_width = width;
         state.current_height = height;
         let x = state.anchor_center_x - width / 2;
+        let y = state.anchor_bottom_y - height;
         let _ = SetWindowPos(
             hwnd,
             HWND_TOPMOST,
             x,
-            state.anchor_y,
+            y,
             width,
             height,
             SWP_NOACTIVATE | SWP_SHOWWINDOW,
@@ -312,12 +316,13 @@ unsafe fn primary_monitor_anchor() -> (i32, i32) {
     if GetMonitorInfoW(monitor, &mut info).0 != 0 {
         let work = info.rcWork;
         let center_x = work.left + (work.right - work.left) / 2;
-        let y = work.top + OVERLAY_TOP_MARGIN;
-        return (center_x, y);
+        let bottom_y = work.bottom - OVERLAY_BOTTOM_MARGIN;
+        return (center_x, bottom_y);
     }
 
     let screen_w = GetSystemMetrics(SM_CXSCREEN);
-    (screen_w / 2, OVERLAY_TOP_MARGIN)
+    let screen_h = GetSystemMetrics(SM_CYSCREEN);
+    (screen_w / 2, screen_h - OVERLAY_BOTTOM_MARGIN)
 }
 
 unsafe fn overlay_state_mut(hwnd: HWND) -> Option<&'static mut OverlayWindowState> {
