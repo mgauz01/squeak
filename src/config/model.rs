@@ -186,10 +186,11 @@ impl AsrModelId {
 
     /// Whether this model's ONNX graph is known to run on the DirectML execution provider.
     ///
-    /// Parakeet/Cohere/Canary TDT batch decoders hit invalid Slice parameters on DirectML
-    /// (ORT `80070057` / `E_INVALIDARG`). Moonshine streaming models work with DirectML.
+    /// All bundled Squeak models currently hit invalid `Slice` parameters on DirectML
+    /// (ORT `80070057` / `E_INVALIDARG`). Keep CPU until a model is verified on DML.
     pub fn compatible_with_directml(self) -> bool {
-        matches!(self, Self::Moonshine(_))
+        let _ = self;
+        false
     }
 }
 
@@ -395,10 +396,10 @@ model_tier = "medium"
     }
 
     #[test]
-    fn parakeet_is_not_directml_compatible() {
+    fn bundled_models_are_not_directml_compatible() {
+        assert!(!AsrModelId::moonshine(ModelTier::Tiny).compatible_with_directml());
         #[cfg(feature = "parakeet")]
         assert!(!AsrModelId::Parakeet.compatible_with_directml());
-        assert!(AsrModelId::moonshine(ModelTier::Tiny).compatible_with_directml());
     }
 
     #[cfg(feature = "cohere")]

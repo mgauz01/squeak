@@ -96,9 +96,8 @@ impl AppRuntime {
         );
         if self.config.directml && !model.compatible_with_directml() {
             eprintln!(
-                "Note: DirectML does not work with {} (ONNX Slice ops fail on GPU). \
-                 ASR runs on CPU. For GPU acceleration, switch to Moonshine in the tray.",
-                model.tray_summary()
+                "Note: DirectML is not yet supported for bundled Squeak models (ONNX Slice ops fail on GPU). \
+                 ASR runs on CPU — set directml = false in config.toml or keep it; behavior is the same today."
             );
         }
         info!("Squeak running — hold Win+Ctrl to dictate, Shift+Alt+Z to paste last");

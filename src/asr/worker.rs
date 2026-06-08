@@ -140,6 +140,8 @@ struct WorkerState {
     loaded: Option<AsrModelId>,
     engine: Option<Box<dyn AsrEngine>>,
     prefer_directml: bool,
+    /// After a DirectML inference failure, stay on CPU for the rest of this session.
+    force_cpu: bool,
     loaded_on_directml: bool,
 }
 
@@ -148,6 +150,7 @@ fn worker_main(rx: Receiver<WorkerCommand>, downloading: Arc<AtomicBool>, prefer
         loaded: None,
         engine: None,
         prefer_directml,
+        force_cpu: false,
         loaded_on_directml: false,
     };
 
@@ -209,14 +212,21 @@ fn ensure_ready(
     Ok(())
 }
 
+fn use_directml(state: &WorkerState, model: AsrModelId) -> bool {
+    state.prefer_directml
+        && !state.force_cpu
+        && model.compatible_with_directml()
+        && cfg!(feature = "directml")
+}
+
 fn load_engine(
     state: &mut WorkerState,
     model: AsrModelId,
     dir: &std::path::Path,
 ) -> Result<(), AsrError> {
-    configure_ort_accelerator_for_model(model, state.prefer_directml);
-    state.loaded_on_directml =
-        state.prefer_directml && model.compatible_with_directml() && cfg!(feature = "directml");
+    let on_directml = use_directml(state, model);
+    configure_ort_accelerator_for_model(model, on_directml);
+    state.loaded_on_directml = on_directml;
     state.engine = Some(create_engine(model, dir)?);
     state.loaded = Some(model);
     info!("Speech model warm-loaded: {}", model.config_key());
@@ -259,8 +269,8 @@ fn retry_transcribe_on_cpu(
     samples: &[f32],
 ) -> Result<String, AsrError> {
     state.engine = None;
+    state.force_cpu = true;
     state.loaded_on_directml = false;
-    configure_ort_accelerator_for_model(model, false);
     let dir = crate::asr::provision::model_dir(model);
     load_engine(state, model, &dir)?;
     eprintln!("Speech model reloaded on CPU after DirectML failure.");
@@ -280,5 +290,17 @@ mod tests {
     fn mock_engine_still_works_in_worker_tests() {
         let mut mock = MockAsrEngine::new("ok");
         assert_eq!(mock.transcribe(&[0.5]).unwrap(), "ok");
+    }
+
+    #[test]
+    fn force_cpu_disables_directml_after_fallback() {
+        let state = WorkerState {
+            loaded: None,
+            engine: None,
+            prefer_directml: true,
+            force_cpu: true,
+            loaded_on_directml: false,
+        };
+        assert!(!use_directml(&state, AsrModelId::moonshine(crate::config::ModelTier::Small)));
     }
 }

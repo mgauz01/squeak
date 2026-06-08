@@ -157,7 +157,7 @@ pub fn configure_ort_accelerator_for_model(model: AsrModelId, prefer_directml: b
 
     if prefer_directml && !model.compatible_with_directml() {
         warn!(
-            "DirectML is not compatible with {} (batch TDT Slice ops fail on DML); using CPU",
+            "DirectML is not compatible with {} (ONNX Slice ops fail on DML); using CPU",
             model.config_key()
         );
     }
