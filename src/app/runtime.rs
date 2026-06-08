@@ -21,6 +21,7 @@ use crate::output::{DeliveryChain, DeliveryError, DeliveryOutcome};
 use crate::platform::win::focus::FocusTarget;
 use crate::platform::win::process::foreground_process_name;
 use crate::postprocess::{self, GrammarWorker, InputContext, PostProcessOptions};
+use crate::platform::win::autostart;
 use crate::ui::{overlay, tray};
 use crate::ui_visual::ui_phase;
 
@@ -62,10 +63,19 @@ impl AppRuntime {
             event_tx.clone(),
             tray_rx,
             Arc::clone(&running),
-            config.asr_model(),
-            config.grammar_enabled(),
-            config.grammar_model(),
+            tray::TrayInit {
+                asr_model: config.asr_model(),
+                grammar_enabled: config.grammar_enabled(),
+                grammar_model: config.grammar_model(),
+                directml: config.directml,
+                xnnpack: config.xnnpack,
+                asr_threads: config.asr_threads,
+                autostart: config.autostart,
+            },
         )?;
+        if let Err(err) = autostart::apply(config.autostart) {
+            warn!("Could not sync autostart registry: {err}");
+        }
         overlay::spawn(overlay_rx, Arc::clone(&running), Arc::clone(&audio_meter))?;
 
         Ok(Self {
@@ -152,6 +162,26 @@ impl AppRuntime {
 
         if let AppEvent::UserAction(UserAction::SetGrammarProfile(key)) = &event {
             return self.handle_set_grammar_profile(key);
+        }
+
+        if let AppEvent::UserAction(UserAction::SetAsrThreads(threads)) = event {
+            return self.handle_set_asr_threads(threads);
+        }
+
+        if let AppEvent::UserAction(UserAction::ToggleDirectMl(enabled)) = event {
+            return self.handle_toggle_directml(enabled);
+        }
+
+        if let AppEvent::UserAction(UserAction::ToggleXnnpack(enabled)) = event {
+            return self.handle_toggle_xnnpack(enabled);
+        }
+
+        if let AppEvent::UserAction(UserAction::ToggleAutostart(enabled)) = event {
+            return self.handle_toggle_autostart(enabled);
+        }
+
+        if matches!(event, AppEvent::UserAction(UserAction::OpenSettings)) {
+            return self.handle_open_settings();
         }
 
         if matches!(event, AppEvent::ArmRecording) {
@@ -261,6 +291,110 @@ impl AppRuntime {
             model.tray_summary()
         );
         info!("Grammar profile changed to {}", model.config_key());
+        Ok(())
+    }
+
+    fn handle_set_asr_threads(&mut self, threads: usize) -> Result<(), RuntimeError> {
+        if self.config.asr_threads == threads {
+            return Ok(());
+        }
+        self.config.asr_threads = threads;
+        self.config
+            .save()
+            .map_err(|e| RuntimeError::Message(e.to_string()))?;
+        let label = if threads == 0 {
+            format!("auto ({})", self.config.asr_thread_count())
+        } else {
+            threads.to_string()
+        };
+        eprintln!("ASR CPU threads set to {label}. Reloading speech model…");
+        info!("ASR threads set to {label}");
+        self.reload_asr_runtime()
+    }
+
+    fn handle_toggle_directml(&mut self, enabled: bool) -> Result<(), RuntimeError> {
+        if self.config.directml == enabled {
+            return Ok(());
+        }
+        self.config.directml = enabled;
+        self.config
+            .save()
+            .map_err(|e| RuntimeError::Message(e.to_string()))?;
+        let model = self.config.asr_model();
+        if enabled && !model.compatible_with_directml() {
+            eprintln!(
+                "DirectML enabled, but {} does not support GPU acceleration yet; ASR stays on CPU.",
+                model.tray_summary()
+            );
+        } else {
+            eprintln!(
+                "DirectML {}. Reloading speech model…",
+                if enabled { "enabled" } else { "disabled" }
+            );
+        }
+        info!("DirectML {}", if enabled { "enabled" } else { "disabled" });
+        self.reload_asr_runtime()
+    }
+
+    fn handle_toggle_xnnpack(&mut self, enabled: bool) -> Result<(), RuntimeError> {
+        if self.config.xnnpack == enabled {
+            return Ok(());
+        }
+        self.config.xnnpack = enabled;
+        self.config
+            .save()
+            .map_err(|e| RuntimeError::Message(e.to_string()))?;
+        if enabled && !crate::asr::xnnpack_available() {
+            eprintln!(
+                "XNNPACK enabled in config, but this ONNX Runtime build has no XNNPACK provider; using CPU."
+            );
+        } else {
+            eprintln!(
+                "XNNPACK {}. Reloading speech model…",
+                if enabled { "enabled" } else { "disabled" }
+            );
+        }
+        info!("XNNPACK {}", if enabled { "enabled" } else { "disabled" });
+        self.reload_asr_runtime()
+    }
+
+    fn handle_toggle_autostart(&mut self, enabled: bool) -> Result<(), RuntimeError> {
+        if self.config.autostart == enabled {
+            return Ok(());
+        }
+        self.config.autostart = enabled;
+        self.config
+            .save()
+            .map_err(|e| RuntimeError::Message(e.to_string()))?;
+        autostart::apply(enabled).map_err(|e| RuntimeError::Message(e.to_string()))?;
+        eprintln!(
+            "Start with Windows {}",
+            if enabled { "enabled" } else { "disabled" }
+        );
+        info!("Autostart {}", if enabled { "enabled" } else { "disabled" });
+        Ok(())
+    }
+
+    fn handle_open_settings(&self) -> Result<(), RuntimeError> {
+        use crate::config::paths::config_path;
+        let path = config_path();
+        if !path.exists() {
+            self.config
+                .save()
+                .map_err(|e| RuntimeError::Message(e.to_string()))?;
+        }
+        autostart::open_in_shell(&path).map_err(|e| RuntimeError::Message(e.to_string()))?;
+        Ok(())
+    }
+
+    fn reload_asr_runtime(&mut self) -> Result<(), RuntimeError> {
+        let ort = AsrWorkerConfig::from_app_config(&self.config);
+        let model = self.config.asr_model();
+        self.asr
+            .apply_ort_config(ort, model)
+            .map_err(|e| RuntimeError::Message(e.to_string()))?;
+        self.asr
+            .preload_in_background(model, Some(self.event_tx.clone()));
         Ok(())
     }
 

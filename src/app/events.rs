@@ -23,6 +23,9 @@ pub enum UserAction {
     SetGrammarProfile(String),
     ToggleAutostart(bool),
     ToggleDirectMl(bool),
+    ToggleXnnpack(bool),
+    /// `0` = auto (logical cores, capped).
+    SetAsrThreads(usize),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

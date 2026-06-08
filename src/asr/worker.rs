@@ -29,6 +29,10 @@ enum WorkerCommand {
     Reload {
         model: AsrModelId,
     },
+    ApplyOrtConfig {
+        ort: AsrWorkerConfig,
+        model: AsrModelId,
+    },
     Shutdown,
 }
 
@@ -164,6 +168,13 @@ impl AsrWorker {
             .send(WorkerCommand::Reload { model })
             .map_err(|_| AsrError::WorkerClosed)
     }
+
+    /// Apply CPU/GPU runtime settings and schedule a model reload on the worker thread.
+    pub fn apply_ort_config(&self, ort: AsrWorkerConfig, model: AsrModelId) -> Result<(), AsrError> {
+        self.tx
+            .send(WorkerCommand::ApplyOrtConfig { ort, model })
+            .map_err(|_| AsrError::WorkerClosed)
+    }
 }
 
 impl Drop for AsrWorker {
@@ -210,6 +221,16 @@ fn worker_main(rx: Receiver<WorkerCommand>, downloading: Arc<AtomicBool>, ort: A
                 info!(
                     "ASR model scheduled for reload on next ensure_ready ({})",
                     model.config_key()
+                );
+            }
+            WorkerCommand::ApplyOrtConfig { ort, model } => {
+                state.ort = ort;
+                state.engine = None;
+                state.loaded = Some(model);
+                state.force_cpu = false;
+                info!(
+                    "ASR runtime config updated ({} threads); model will reload",
+                    ort.threads
                 );
             }
             WorkerCommand::Shutdown => break,
