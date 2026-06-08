@@ -100,14 +100,14 @@ fn append_grammar_item(
 
 fn on_bool_toggle(
     label: &'static str,
-    item: &CheckMenuItem,
     flag: &AtomicBool,
     tx: &Sender<AppEvent>,
     action: fn(bool) -> UserAction,
 ) {
     let enabled = !flag.load(Ordering::Relaxed);
     flag.store(enabled, Ordering::Relaxed);
-    let _ = item.set_checked(enabled);
+    // CheckMenuItem is !Send/!Sync (Rc<RefCell>), so the menu handler must not
+    // capture items — Windows updates the checkmark on click before this runs.
     let _ = tx.send(AppEvent::UserAction(action(enabled)));
     eprintln!(
         "{} {label}…",
@@ -306,7 +306,6 @@ fn run_tray(
             if directml_id == event.id() {
                 on_bool_toggle(
                     "DirectML",
-                    &directml_item,
                     &directml_on,
                     &event_tx_menu,
                     UserAction::ToggleDirectMl,
@@ -316,7 +315,6 @@ fn run_tray(
             if xnnpack_id == event.id() {
                 on_bool_toggle(
                     "XNNPACK",
-                    &xnnpack_item,
                     &xnnpack_on,
                     &event_tx_menu,
                     UserAction::ToggleXnnpack,
@@ -326,7 +324,6 @@ fn run_tray(
             if autostart_id == event.id() {
                 on_bool_toggle(
                     "start with Windows",
-                    &autostart_item,
                     &autostart_on,
                     &event_tx_menu,
                     UserAction::ToggleAutostart,
