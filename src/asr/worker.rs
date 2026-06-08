@@ -55,7 +55,7 @@ impl Default for AsrWorkerConfig {
         Self {
             directml: false,
             threads: recommended_thread_count(),
-            xnnpack: cfg!(feature = "xnnpack"),
+            xnnpack: false,
         }
     }
 }

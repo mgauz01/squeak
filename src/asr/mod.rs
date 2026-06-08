@@ -34,7 +34,7 @@ pub use model_download::{
 #[cfg(windows)]
 pub use moonshine::{
     configure_ort_runtime, is_likely_directml_inference_error, ort_accelerator_summary,
-    MoonshineEngine,
+    xnnpack_available, MoonshineEngine,
 };
 #[cfg(all(windows, feature = "parakeet"))]
 pub use parakeet::ParakeetEngine;

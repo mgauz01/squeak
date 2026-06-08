@@ -227,7 +227,7 @@ pub struct Config {
 }
 
 fn default_xnnpack() -> bool {
-    cfg!(feature = "xnnpack")
+    false
 }
 
 impl<'de> Deserialize<'de> for Config {
@@ -360,9 +360,6 @@ mod tests {
         assert!(cfg.autostart);
         assert!(!cfg.directml);
         assert_eq!(cfg.asr_threads, 0);
-        #[cfg(feature = "xnnpack")]
-        assert!(cfg.xnnpack);
-        #[cfg(not(feature = "xnnpack"))]
         assert!(!cfg.xnnpack);
     }
 

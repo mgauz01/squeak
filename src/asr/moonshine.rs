@@ -135,12 +135,26 @@ mod tests {
     }
 
     #[test]
+    fn prebuilt_ort_does_not_offer_xnnpack() {
+        assert!(!xnnpack_available());
+    }
+
+    #[test]
     fn detects_directml_slice_errors() {
         assert!(is_likely_directml_inference_error(
             "inference error: Non-zero status code returned while running Slice node. 80070057"
         ));
         assert!(!is_likely_directml_inference_error("recording too short"));
     }
+}
+
+/// Whether XNNPACK can actually be used in this binary.
+///
+/// The `ort/xnnpack` crate feature only enables registration APIs. Microsoft's
+/// prebuilt ORT DLLs from `download-binaries` do not ship the XNNPACK provider,
+/// which produces `XnnpackExecutionProvider is not supported in this build` errors.
+pub fn xnnpack_available() -> bool {
+    false
 }
 
 /// Configure ORT execution provider and CPU thread budget before loading ONNX sessions.
@@ -183,14 +197,20 @@ pub fn configure_ort_runtime(
 
     #[cfg(feature = "xnnpack")]
     if use_xnnpack {
-        use transcribe_rs::{set_ort_accelerator, OrtAccelerator};
-        set_ort_accelerator(OrtAccelerator::Xnnpack);
-        info!(
-            "ORT accelerator for {}: XNNPACK ({} threads)",
-            model.config_key(),
+        if xnnpack_available() {
+            use transcribe_rs::{set_ort_accelerator, OrtAccelerator};
+            set_ort_accelerator(OrtAccelerator::Xnnpack);
+            info!(
+                "ORT accelerator for {}: XNNPACK ({} threads)",
+                model.config_key(),
+                threads
+            );
+            return;
+        }
+        warn!(
+            "config xnnpack=true ignored: prebuilt ONNX Runtime has no XNNPACK provider; using CPU ({} threads)",
             threads
         );
-        return;
     }
 
     use transcribe_rs::{set_ort_accelerator, OrtAccelerator};
@@ -214,7 +234,7 @@ pub fn ort_accelerator_summary(
         }
     }
     #[cfg(feature = "xnnpack")]
-    if use_xnnpack {
+    if use_xnnpack && xnnpack_available() {
         return "XNNPACK";
     }
     "CPU"
