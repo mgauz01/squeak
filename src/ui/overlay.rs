@@ -26,10 +26,12 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use crate::app::AppState;
 use crate::audio::AudioLevelMeter;
 use crate::overlay_grow::{
-    display_width, recording_width_fraction, OVERLAY_HEIGHT, OVERLAY_WIDTH, PILL_CORNER,
-    PILL_MIN_WIDTH,
+    animated_scale, display_width, recording_width_fraction, scaled_dimension, OVERLAY_HEIGHT,
+    OVERLAY_WIDTH, PILL_CORNER, PILL_MIN_WIDTH,
 };
-use crate::ui_visual::{phase_uses_grow_animation, ptt_hold_fraction, ui_phase, UiPhase};
+use crate::ui_visual::{
+    phase_display_scale, phase_uses_grow_animation, ptt_hold_fraction, ui_phase, UiPhase,
+};
 
 const PILL_INSET: i32 = 5;
 const OVERLAY_TOP_MARGIN: i32 = 16;
@@ -51,7 +53,11 @@ struct OverlayWindowState {
     grow_start_ms: u64,
     asr_ready: bool,
     asr_ready_ms: Option<u64>,
+    scale_from: f32,
+    scale_to: f32,
+    scale_start_ms: u64,
     current_width: i32,
+    current_height: i32,
 }
 
 pub fn spawn(
@@ -121,11 +127,15 @@ unsafe fn run_overlay(
         grow_start_ms: 0,
         asr_ready: false,
         asr_ready_ms: None,
+        scale_from: 1.0,
+        scale_to: 1.0,
+        scale_start_ms: 0,
         current_width: PILL_MIN_WIDTH,
+        current_height: OVERLAY_HEIGHT,
     });
     SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(state) as isize);
 
-    apply_pill_window_shape(hwnd, PILL_MIN_WIDTH);
+    apply_pill_window_shape(hwnd, PILL_MIN_WIDTH, OVERLAY_HEIGHT);
 
     let _ = ShowWindow(hwnd, SW_HIDE);
     if SetTimer(hwnd, ANIM_TIMER_ID, ANIM_MS, None) == 0 {
@@ -158,34 +168,70 @@ unsafe fn run_overlay(
     Ok(())
 }
 
-fn pill_corner_for_width(width: i32) -> i32 {
-    PILL_CORNER.min(width.max(1))
+fn pill_corner_for_size(width: i32, height: i32) -> i32 {
+    PILL_CORNER.min(width.max(1)).min(height.max(1))
 }
 
-unsafe fn apply_pill_window_shape(hwnd: HWND, width: i32) {
-    let corner = pill_corner_for_width(width);
-    let rgn = CreateRoundRectRgn(0, 0, width, OVERLAY_HEIGHT, corner, corner);
+unsafe fn apply_pill_window_shape(hwnd: HWND, width: i32, height: i32) {
+    let corner = pill_corner_for_size(width, height);
+    let rgn = CreateRoundRectRgn(0, 0, width, height, corner, corner);
     let _ = SetWindowRgn(hwnd, rgn, BOOL::from(true));
 }
 
-unsafe fn update_pill_geometry(hwnd: HWND, state: &mut OverlayWindowState) {
-    let width = match state.phase {
-        UiPhase::Hidden => return,
+fn base_pill_width(state: &OverlayWindowState, now_ms: u64) -> i32 {
+    match state.phase {
+        UiPhase::Hidden => PILL_MIN_WIDTH,
         UiPhase::Processing => OVERLAY_WIDTH,
         UiPhase::Armed | UiPhase::RecordingPtt | UiPhase::RecordingHandsFree => {
-            let now = GetTickCount64();
+            let allow_full_grow = !matches!(state.phase, UiPhase::Armed);
             let frac = recording_width_fraction(
                 state.grow_start_ms,
-                now,
+                now_ms,
                 state.asr_ready,
                 state.asr_ready_ms,
+                allow_full_grow,
             );
             display_width(frac)
         }
-    };
+    }
+}
 
-    if width != state.current_width {
+fn current_display_scale(state: &OverlayWindowState, now_ms: u64) -> f32 {
+    animated_scale(state.scale_from, state.scale_to, state.scale_start_ms, now_ms)
+}
+
+fn scale_animation_active(state: &OverlayWindowState, now_ms: u64) -> bool {
+    state.scale_start_ms != 0
+        && current_display_scale(state, now_ms) != state.scale_to
+}
+
+unsafe fn begin_scale_transition(state: &mut OverlayWindowState, target: f32, now_ms: u64) {
+    let current = current_display_scale(state, now_ms);
+    if (current - target).abs() < f32::EPSILON {
+        state.scale_from = target;
+        state.scale_to = target;
+        state.scale_start_ms = 0;
+        return;
+    }
+    state.scale_from = current;
+    state.scale_to = target;
+    state.scale_start_ms = now_ms;
+}
+
+unsafe fn update_pill_geometry(hwnd: HWND, state: &mut OverlayWindowState) {
+    if state.phase == UiPhase::Hidden {
+        return;
+    }
+
+    let now = GetTickCount64();
+    let scale = current_display_scale(state, now);
+    let base_w = base_pill_width(state, now);
+    let width = scaled_dimension(base_w, scale).max(scaled_dimension(PILL_MIN_WIDTH, scale));
+    let height = scaled_dimension(OVERLAY_HEIGHT, scale).max(8);
+
+    if width != state.current_width || height != state.current_height {
         state.current_width = width;
+        state.current_height = height;
         let x = state.anchor_center_x - width / 2;
         let _ = SetWindowPos(
             hwnd,
@@ -193,10 +239,10 @@ unsafe fn update_pill_geometry(hwnd: HWND, state: &mut OverlayWindowState) {
             x,
             state.anchor_y,
             width,
-            OVERLAY_HEIGHT,
+            height,
             SWP_NOACTIVATE | SWP_SHOWWINDOW,
         );
-        apply_pill_window_shape(hwnd, width);
+        apply_pill_window_shape(hwnd, width, height);
     }
 }
 
@@ -216,6 +262,7 @@ unsafe fn apply_overlay_phase(hwnd: HWND, phase: UiPhase) {
     }
     let prev = state.phase;
     state.phase = phase;
+    begin_scale_transition(state, phase_display_scale(phase), GetTickCount64());
 
     match phase {
         UiPhase::Hidden => {
@@ -230,7 +277,6 @@ unsafe fn apply_overlay_phase(hwnd: HWND, phase: UiPhase) {
             let _ = InvalidateRect(hwnd, None, false);
         }
         UiPhase::Processing => {
-            state.current_width = OVERLAY_WIDTH;
             let _ = ShowWindow(hwnd, SW_SHOW);
             update_pill_geometry(hwnd, state);
             let _ = InvalidateRect(hwnd, None, false);
@@ -298,21 +344,21 @@ unsafe extern "system" fn overlay_wnd_proc(
             let mut ps = PAINTSTRUCT::default();
             let hdc = BeginPaint(hwnd, &mut ps);
             if !hdc.is_invalid() {
-                let width = overlay_state_mut(hwnd)
-                    .map(|s| s.current_width)
-                    .unwrap_or(PILL_MIN_WIDTH);
+                let (width, height) = overlay_state_mut(hwnd)
+                    .map(|s| (s.current_width, s.current_height))
+                    .unwrap_or((PILL_MIN_WIDTH, OVERLAY_HEIGHT));
                 let mem_dc = CreateCompatibleDC(hdc);
                 if !mem_dc.is_invalid() {
-                    let bitmap = CreateCompatibleBitmap(hdc, width, OVERLAY_HEIGHT);
+                    let bitmap = CreateCompatibleBitmap(hdc, width, height);
                     if !bitmap.is_invalid() {
                         let old_bitmap = SelectObject(mem_dc, bitmap);
-                        paint_overlay(hwnd, mem_dc, width);
+                        paint_overlay(hwnd, mem_dc, width, height);
                         let _ = BitBlt(
                             hdc,
                             0,
                             0,
                             width,
-                            OVERLAY_HEIGHT,
+                            height,
                             mem_dc,
                             0,
                             0,
@@ -329,7 +375,10 @@ unsafe extern "system" fn overlay_wnd_proc(
         }
         WM_TIMER if wparam.0 == ANIM_TIMER_ID => {
             if let Some(state) = overlay_state_mut(hwnd) {
-                if phase_uses_grow_animation(state.phase) {
+                let now = GetTickCount64();
+                if phase_uses_grow_animation(state.phase)
+                    || scale_animation_active(state, now)
+                {
                     update_pill_geometry(hwnd, state);
                 }
                 if state.phase != UiPhase::Hidden {
@@ -346,29 +395,41 @@ unsafe extern "system" fn overlay_wnd_proc(
     }
 }
 
-fn outer_pill_rect(width: i32) -> windows::Win32::Foundation::RECT {
+fn pill_inset_for_height(height: i32) -> i32 {
+    let inset = (PILL_INSET as f32 * (height as f32 / OVERLAY_HEIGHT as f32)).round() as i32;
+    inset.clamp(2, height / 3)
+}
+
+fn outer_pill_rect(width: i32, height: i32) -> windows::Win32::Foundation::RECT {
     windows::Win32::Foundation::RECT {
         left: 0,
         top: 0,
         right: width,
-        bottom: OVERLAY_HEIGHT,
+        bottom: height,
     }
 }
 
-fn inner_pill_rect(width: i32) -> windows::Win32::Foundation::RECT {
+fn inner_pill_rect(width: i32, height: i32) -> windows::Win32::Foundation::RECT {
+    let inset = pill_inset_for_height(height);
     windows::Win32::Foundation::RECT {
-        left: PILL_INSET,
-        top: PILL_INSET,
-        right: width - PILL_INSET,
-        bottom: OVERLAY_HEIGHT - PILL_INSET,
+        left: inset,
+        top: inset,
+        right: width - inset,
+        bottom: height - inset,
     }
 }
 
-fn inner_pill_radius(width: i32) -> i32 {
-    (pill_corner_for_width(width) - PILL_INSET).max(4)
+fn inner_pill_radius(width: i32, height: i32) -> i32 {
+    let inset = pill_inset_for_height(height);
+    (pill_corner_for_size(width, height) - inset).max(4)
 }
 
-unsafe fn paint_overlay(hwnd: HWND, hdc: windows::Win32::Graphics::Gdi::HDC, width: i32) {
+unsafe fn paint_overlay(
+    hwnd: HWND,
+    hdc: windows::Win32::Graphics::Gdi::HDC,
+    width: i32,
+    height: i32,
+) {
     use windows::Win32::Foundation::RECT;
 
     let Some(state) = overlay_state_mut(hwnd) else {
@@ -379,10 +440,10 @@ unsafe fn paint_overlay(hwnd: HWND, hdc: windows::Win32::Graphics::Gdi::HDC, wid
     }
 
     let tick_s = GetTickCount64() as f64 / 1000.0;
-    let outer = outer_pill_rect(width);
-    let inner = inner_pill_rect(width);
-    let outer_corner = pill_corner_for_width(width);
-    let inner_r = inner_pill_radius(width);
+    let outer = outer_pill_rect(width, height);
+    let inner = inner_pill_rect(width, height);
+    let outer_corner = pill_corner_for_size(width, height);
+    let inner_r = inner_pill_radius(width, height);
 
     let outer_clip = CreateRoundRectRgn(
         outer.left,
@@ -396,7 +457,7 @@ unsafe fn paint_overlay(hwnd: HWND, hdc: windows::Win32::Graphics::Gdi::HDC, wid
 
     // Convex dome: lighter crown, darker base (no outline stroke).
     const SHELL_BANDS: i32 = 10;
-    let band_h = (OVERLAY_HEIGHT + SHELL_BANDS - 1) / SHELL_BANDS;
+    let band_h = (height + SHELL_BANDS - 1) / SHELL_BANDS;
     for band in 0..SHELL_BANDS {
         let y0 = outer.top + band * band_h;
         let y1 = (y0 + band_h).min(outer.bottom);

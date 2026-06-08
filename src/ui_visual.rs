@@ -61,6 +61,18 @@ pub fn phase_uses_grow_animation(phase: UiPhase) -> bool {
     )
 }
 
+/// Armed / waiting: 40% smaller than active recording or processing.
+pub const PILL_INACTIVE_SCALE: f32 = 0.6;
+
+/// Visual scale for the top-center pill (width + height).
+pub fn phase_display_scale(phase: UiPhase) -> f32 {
+    match phase {
+        UiPhase::Armed => PILL_INACTIVE_SCALE,
+        UiPhase::RecordingPtt | UiPhase::RecordingHandsFree | UiPhase::Processing => 1.0,
+        UiPhase::Hidden => PILL_INACTIVE_SCALE,
+    }
+}
+
 /// 16×16 RGBA tray icon pixels (pill purple tones).
 pub fn tray_icon_rgba(state: TrayIconState, size: u32) -> Vec<u8> {
     let mut rgba = vec![0u8; (size * size * 4) as usize];
@@ -150,6 +162,12 @@ mod tests {
     fn ptt_hold_reaches_one_at_threshold() {
         let frac = ptt_hold_fraction(0, timing::PTT_MIN_HOLD_MS);
         assert!((frac - 1.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn armed_uses_inactive_scale() {
+        assert!((phase_display_scale(UiPhase::Armed) - PILL_INACTIVE_SCALE).abs() < f32::EPSILON);
+        assert!((phase_display_scale(UiPhase::RecordingPtt) - 1.0).abs() < f32::EPSILON);
     }
 
     #[test]
