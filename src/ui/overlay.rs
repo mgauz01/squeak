@@ -20,7 +20,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DispatchMessageW, GetSystemMetrics, GetWindowLongPtrW,
     GetWindowRect, PeekMessageW, RegisterClassW, SetTimer, SetWindowLongPtrW, SetWindowPos,
     ShowWindow, TranslateMessage, UpdateLayeredWindow, GWLP_USERDATA, HWND_TOPMOST, MSG,
-    PM_REMOVE, SM_CXSCREEN, SWP_NOACTIVATE, SWP_SHOWWINDOW, ULW_ALPHA, WM_DESTROY,
+    PM_REMOVE, SM_CXSCREEN, SWP_NOACTIVATE, SWP_SHOWWINDOW, SW_HIDE, SW_SHOW, ULW_ALPHA,
+    WM_DESTROY,
     WM_ERASEBKGND, WM_PAINT, WM_TIMER, WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
     WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };

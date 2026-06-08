@@ -174,7 +174,7 @@ fn run_tray(
 
         dispatch_pending_messages(&mut msg);
 
-        let mut tray: TrayIcon = TrayIconBuilder::new()
+        let tray: TrayIcon = TrayIconBuilder::new()
             .with_menu(Box::new(menu))
             .with_tooltip("Squeak — voice dictation (tray: Speech model for accuracy)")
             .with_icon(icon)
