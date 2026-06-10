@@ -12,7 +12,15 @@
 
 <br><br>
 
+<a href="https://github.com/mgauz01/squeak/releases/latest/download/Squeak-0.1.0-x64.msi">
+  <img alt="Download Squeak for Windows (MSI x64)" src="https://img.shields.io/badge/Download%20for%20Windows-MSI%20(x64)-962872?style=for-the-badge&logo=windows&logoColor=white">
+</a>
+
+<br><br>
+
 <sub>A purple pill at the bottom of your screen means Squeak is listening for <strong>Win+Ctrl</strong>.</sub>
+
+<sub>Or browse <a href="https://github.com/mgauz01/squeak/releases">all releases</a>.</sub>
 
 </div>
 
@@ -59,7 +67,11 @@ On first dictation, speech models download once to `%LOCALAPPDATA%\Squeak\models
 
 ### Option A — Download the MSI (recommended)
 
-1. Get the latest **`Squeak-*-x64.msi`** from [**GitHub Releases**](https://github.com/mgauz01/squeak/releases).
+<a href="https://github.com/mgauz01/squeak/releases/latest/download/Squeak-0.1.0-x64.msi">
+  <img alt="Download Squeak MSI" src="https://img.shields.io/badge/Download-MSI%20(x64)-962872?style=for-the-badge&logo=windows&logoColor=white">
+</a>
+
+1. Click **Download MSI** above (or open [**Releases**](https://github.com/mgauz01/squeak/releases) and pick the latest `Squeak-*-x64.msi`).
 2. Run the installer (UAC prompt). Squeak installs to `C:\Program Files\Squeak\` and adds a Start Menu shortcut.
 3. Launch **Squeak** from the Start Menu.
 
