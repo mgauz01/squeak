@@ -65,11 +65,12 @@
           Id="ApplicationStartMenuShortcut"
           Name="Squeak"
           Description="Local voice dictation (Win+Ctrl push-to-talk)"
-          Target="[#SqueakEXE]"
+          Target="[INSTALLFOLDER]squeak.exe"
           WorkingDirectory="INSTALLFOLDER" />
         <RemoveFolder Id="RemoveStartMenuFolder" Directory="ApplicationProgramsFolder" On="uninstall" />
+        <!-- HKCU KeyPath: required for Start Menu shortcuts (ICE38/ICE43/ICE57). -->
         <RegistryValue
-          Root="HKLM"
+          Root="HKCU"
           Key="Software\Squeak"
           Name="Installed"
           Type="integer"

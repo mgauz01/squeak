@@ -154,6 +154,7 @@ if ($dlls.Count -gt 0) {
         -var var.DllDir `
         -sfrag `
         -srd `
+        -sreg `
         -gg `
         -ag `
         -out $harvestedWxs
