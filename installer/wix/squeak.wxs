@@ -88,6 +88,4 @@
       <ComponentRef Id="StartMenuShortcutComponent" />
     </ComponentGroup>
   </Fragment>
-
-  <?include Harvested.wxs ?>
 </Wix>
