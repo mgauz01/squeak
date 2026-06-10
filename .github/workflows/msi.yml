@@ -19,8 +19,21 @@ jobs:
       - name: Add MSVC dev environment
         uses: ilammy/msvc-dev-cmd@v1
 
-      - name: Install WiX Toolset
-        run: choco install wixtoolset --version=3.14.1 -y --no-progress
+      - name: Ensure WiX Toolset
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (Get-Command candle -ErrorAction SilentlyContinue) {
+            Write-Host 'WiX already installed (candle on PATH).'
+            exit 0
+          }
+          $wixBin = "${env:ProgramFiles(x86)}\WiX Toolset v3.14\bin"
+          if (Test-Path (Join-Path $wixBin 'candle.exe')) {
+            Write-Host "WiX found at $wixBin"
+            echo "$wixBin" >> $env:GITHUB_PATH
+            exit 0
+          }
+          choco install wixtoolset -y --no-progress
 
       - name: Build MSI
         shell: pwsh
