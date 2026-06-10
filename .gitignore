@@ -11,4 +11,7 @@
 Thumbs.db
 .env
 .env.*
-*.md
+STRATEGY.md
+AGENTS.md
+docs/
+assets/
