@@ -2,7 +2,7 @@
 
 # Squeak
 
-**Local voice dictation for Windows — private, fast, no cloud.**
+Local voice dictation for Windows. Speech stays on your PC.
 
 <br>
 
@@ -18,97 +18,46 @@
 
 <br><br>
 
-<sub>A purple pill at the bottom of your screen means Squeak is listening for <strong>Win+Ctrl</strong>.</sub>
+<sub>Purple pill at the bottom of the screen = ready. Hold <strong>Win+Ctrl</strong> to dictate.</sub>
 
-<sub>Or browse <a href="https://github.com/mgauz01/squeak/releases">all releases</a>.</sub>
+<sub><a href="https://github.com/mgauz01/squeak/releases">Other releases</a></sub>
 
 </div>
 
 ---
 
-## What is Squeak?
+Squeak types what you say at the cursor: email, docs, chat, editors. Push-to-talk, optional hands-free, light cleanup (fillers and punctuation). Not for meeting transcription or macOS/Linux.
 
-Squeak turns your speech into text **where your cursor already is** — email, docs, chat, code editors. Everything runs on your PC: no audio sent to the cloud, no subscription.
+Install the MSI, allow the microphone, launch from the Start Menu. Hold Win+Ctrl while you talk (wait ~300 ms before speaking). Double-tap Win+Ctrl for hands-free; double-tap again to stop. Shift+Alt+Z pastes the last transcript again. Tray menu: model, settings, config.toml, quit.
 
-It is a focused Wispr-style dictation tool: push-to-talk, optional hands-free mode, light cleanup (fillers and punctuation), and a small animated overlay so you always know when the mic is live.
+Models download on first dictation to `%LOCALAPPDATA%\Squeak\models\`. Settings: `%APPDATA%\Squeak\config.toml`.
 
-**Good for:** quick dictation, accessibility, reducing typing strain, drafting prose anywhere you can type.
-
-**Not for:** meeting transcription, multi-user servers, or macOS/Linux (Windows only today).
-
----
-
-## How to use
-
-1. **Install and launch** Squeak (see below). Allow microphone access when Windows asks.
-2. Look for the **purple pill** along the bottom edge of your screen and the **tray icon** in the taskbar.
-3. **Dictate:**
-   - **Push-to-talk** — hold **Win+Ctrl**, speak, release. Hold at least ~300 ms so recording starts.
-   - **Hands-free** — double-tap **Win+Ctrl** to start; double-tap again to stop.
-4. Text is typed at the caret. **Shift+Alt+Z** pastes the last transcript again.
-5. **Tray menu** — speech model, settings, **Open config.toml**, quit.
-
-On first dictation, speech models download once to `%LOCALAPPDATA%\Squeak\models\` (not included in the installer). Settings live in `%APPDATA%\Squeak\config.toml`.
-
-<details>
-<summary><strong>Tips if accuracy feels off</strong></summary>
-
-- Hold **Win+Ctrl** the whole time you are speaking.
-- Pick **Moonshine Small** or **Medium** in the tray if you need better quality.
-- Grant microphone permission in **Settings → Privacy → Microphone**.
-
-</details>
+Recognition off? Hold Win+Ctrl the whole time, try Moonshine Small or Medium in the tray, check Settings → Privacy → Microphone.
 
 ---
 
 ## Install
 
-**Requirements:** Windows 10 or later, a microphone, admin rights for install.
+Windows 10+, a mic, admin rights for the MSI.
 
-### Option A — Download the MSI (recommended)
-
-<a href="https://github.com/mgauz01/squeak/releases/latest/download/Squeak-0.1.0-x64.msi">
-  <img alt="Download Squeak MSI" src="https://img.shields.io/badge/Download-MSI%20(x64)-962872?style=for-the-badge&logo=windows&logoColor=white">
-</a>
-
-1. Click **Download MSI** above (or open [**Releases**](https://github.com/mgauz01/squeak/releases) and pick the latest `Squeak-*-x64.msi`).
-2. Run the installer (UAC prompt). Squeak installs to `C:\Program Files\Squeak\` and adds a Start Menu shortcut.
-3. Launch **Squeak** from the Start Menu.
+Use the download button above, or grab `Squeak-*-x64.msi` from [Releases](https://github.com/mgauz01/squeak/releases). Installs to `C:\Program Files\Squeak\`. Remove via Settings → Apps.
 
 ```powershell
-# Or from a shell (elevated):
 msiexec /i ".\Squeak-0.1.0-x64.msi"
 ```
 
-Uninstall via **Settings → Apps → Squeak**.
-
-### Option B — Build from source
-
-For developers who already have [Rust](https://rustup.rs/) on Windows:
-
-```powershell
-git clone https://github.com/mgauz01/squeak.git
-cd squeak
-cargo run --release
-```
-
-To package an MSI yourself: `.\installer\build.ps1` (needs [WiX Toolset 3.14](https://github.com/wixtoolset/wix3/releases/tag/wix3141rtm), e.g. `choco install wixtoolset --version=3.14.1 -y`).
+Build from source ([Rust](https://rustup.rs/) on Windows): clone, `cargo run --release`. MSI: `.\installer\build.ps1` ([WiX 3.14](https://github.com/wixtoolset/wix3/releases/tag/wix3141rtm), e.g. `choco install wixtoolset --version=3.14.1 -y`).
 
 ---
 
 ## Contributing
 
-Squeak is open source and **contributions are welcome**.
-
-- **Bug reports & ideas** — [open an issue](https://github.com/mgauz01/squeak/issues)
-- **Code** — fork, branch, and [open a pull request](https://github.com/mgauz01/squeak/pulls)
-
-Please keep changes focused and include a short description of what you tested on Windows. Design docs and plans live under [`docs/`](docs/) if you want deeper context before diving in.
+Open an [issue](https://github.com/mgauz01/squeak/issues) or [pull request](https://github.com/mgauz01/squeak/pulls). Note what you tested on Windows. Background in [`docs/`](docs/).
 
 ---
 
 <div align="center">
 
-<sub>MIT · <a href="docs/">Developer docs</a></sub>
+<sub>MIT</sub>
 
 </div>
