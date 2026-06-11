@@ -5,3 +5,7 @@
 ## 2025-05-15 - [Regex-based Filler Removal]
 **Learning:** The previous O(N*M) filler removal was extremely inefficient for long dictations, performing full string allocations and lowercase conversions for every filler word. A single-pass regex using `OnceLock` is significantly faster and more memory-efficient.
 **Action:** Use `regex` with `OnceLock` for multi-pattern replacement in performance-critical text processing instead of nested loops.
+
+## 2025-05-15 - [On-the-fly Audio Resampling]
+**Learning:** Recording raw high-frequency stereo audio (48kHz) consumes 6x more memory than the ASR engine needs (16kHz mono) and adds significant end-of-dictation latency due to batch processing. State-aware chunked resampling in the audio callback eliminates this delay.
+**Action:** Move mandatory audio format conversions into the live callback. Use stateful resamplers to handle phase and frame boundaries correctly across chunks.
