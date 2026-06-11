@@ -84,6 +84,15 @@ To package an MSI yourself: `.\installer\build.ps1` (needs [WiX Toolset 3.14](ht
 
 ---
 
+## CI
+
+- **[`ci.yml`](.github/workflows/ci.yml)** — runs on every push to `main` and every pull request targeting `main`: `cargo fmt`, Clippy, and unit tests on Linux.
+- **[`msi.yml`](.github/workflows/msi.yml)** — runs on version tags (`v*`) or manual dispatch: Linux + Windows validation (including ASR smoke/bench on a committed fixture), then builds the MSI only if validation passes.
+
+See the [Actions](https://github.com/mgauz01/squeak/actions) tab for workflow runs.
+
+---
+
 ## Contributing
 
 Squeak is open source and **contributions are welcome**.

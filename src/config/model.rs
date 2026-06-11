@@ -2,18 +2,13 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use super::grammar::GrammarModelId;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ModelTier {
     Tiny,
+    #[default]
     Small,
     Medium,
-}
-
-impl Default for ModelTier {
-    fn default() -> Self {
-        Self::Small
-    }
 }
 
 impl ModelTier {
@@ -67,12 +62,12 @@ pub enum AsrModelId {
 
 impl Default for AsrModelId {
     fn default() -> Self {
-        #[cfg(feature = "parakeet")]
-        {
-            return Self::Parakeet;
+        match () {
+            #[cfg(feature = "parakeet")]
+            () => Self::Parakeet,
+            #[cfg(not(feature = "parakeet"))]
+            () => Self::Moonshine(ModelTier::default()),
         }
-        #[cfg(not(feature = "parakeet"))]
-        Self::Moonshine(ModelTier::default())
     }
 }
 

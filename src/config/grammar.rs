@@ -1,19 +1,14 @@
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// Local grammar-correction backend profile.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum GrammarModelId {
+    #[default]
     Tiny,
     #[cfg(feature = "gec-coedit")]
     Coedit,
     #[cfg(feature = "gec-llama")]
     Llama,
-}
-
-impl Default for GrammarModelId {
-    fn default() -> Self {
-        Self::Tiny
-    }
 }
 
 impl GrammarModelId {

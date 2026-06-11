@@ -20,6 +20,11 @@ path = "examples/asr_smoke.rs"
 required-features = []
 
 [[example]]
+name = "asr_bench"
+path = "examples/asr_bench.rs"
+required-features = []
+
+[[example]]
 name = "gec_smoke"
 path = "examples/gec_smoke.rs"
 required-features = ["gec-tiny"]
