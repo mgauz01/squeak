@@ -64,7 +64,7 @@ pub fn download_tarball_to_dir_optional(
     let mut archive_file = File::create(&archive_path)?;
     let mut downloaded: u64 = 0;
 
-    http::stream_url_to_writer(url, &mut archive_file, |bytes, total| {
+    http::stream_url_to_writer_unlimited(url, &mut archive_file, |bytes, total| {
         downloaded = bytes;
         progress(DownloadProgress::Downloading { downloaded, total });
     })

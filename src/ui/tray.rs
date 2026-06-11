@@ -209,6 +209,9 @@ fn run_tray(
     let open_config_item = MenuItem::new("Open config.toml…", true, None);
     let open_config_id = open_config_item.id().clone();
 
+    let check_updates_item = MenuItem::new("Check for updates…", true, None);
+    let check_updates_id = check_updates_item.id().clone();
+
     let directml_on = AtomicBool::new(init.directml);
     let xnnpack_on = AtomicBool::new(init.xnnpack);
     let autostart_on = AtomicBool::new(init.autostart);
@@ -251,6 +254,7 @@ fn run_tray(
     menu.append(&xnnpack_item)?;
     menu.append(&autostart_item)?;
     menu.append(&open_config_item)?;
+    menu.append(&check_updates_item)?;
     menu.append(&PredefinedMenuItem::separator())?;
     menu.append(&MenuItem::new("Hold Win+Ctrl to dictate", false, None))?;
     menu.append(&PredefinedMenuItem::separator())?;
@@ -332,6 +336,10 @@ fn run_tray(
             }
             if open_config_id == event.id() {
                 let _ = event_tx_menu.send(AppEvent::UserAction(UserAction::OpenSettings));
+                return;
+            }
+            if check_updates_id == event.id() {
+                let _ = event_tx_menu.send(AppEvent::UserAction(UserAction::CheckForUpdates));
                 return;
             }
         }));

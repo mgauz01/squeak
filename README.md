@@ -38,9 +38,11 @@ It is a focused Wispr-style dictation tool: push-to-talk, optional hands-free mo
    - **Push-to-talk** — hold **Win+Ctrl**, speak, release. Hold at least ~300 ms so recording starts.
    - **Hands-free** — double-tap **Win+Ctrl** to start; double-tap again to stop.
 4. Text is typed at the caret. **Shift+Alt+Z** pastes the last transcript again.
-5. **Tray menu** — speech model, settings, **Open config.toml**, quit.
+5. **Tray menu** — speech model, settings, **Open config.toml**, **Check for updates…**, quit.
 
 On first dictation, speech models download once to `%LOCALAPPDATA%\Squeak\models\` (not included in the installer). Settings live in `%APPDATA%\Squeak\config.toml`.
+
+**Updates (MSI installs):** Tray → **Check for updates…** looks for a newer release on GitHub, asks for confirmation, then downloads the MSI and restarts Squeak.
 
 <details>
 <summary><strong>Tips if accuracy feels off</strong></summary>

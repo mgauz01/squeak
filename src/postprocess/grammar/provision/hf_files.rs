@@ -26,7 +26,7 @@ pub fn download_hf_files(
         let mut file = File::create(&dest)?;
         let mut file_downloaded: u64 = 0;
 
-        http::stream_url_to_writer(&url, &mut file, |bytes, total| {
+        http::stream_url_to_writer_unlimited(&url, &mut file, |bytes, total| {
             file_downloaded = bytes;
             progress(DownloadProgress::Downloading {
                 downloaded: total_downloaded + file_downloaded,

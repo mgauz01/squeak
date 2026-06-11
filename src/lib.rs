@@ -8,6 +8,7 @@ pub mod overlay_grow;
 pub mod overlay_raster;
 pub mod postprocess;
 pub mod ui_visual;
+pub mod update;
 
 pub mod audio;
 #[cfg(windows)]

@@ -26,6 +26,7 @@ pub enum UserAction {
     ToggleXnnpack(bool),
     /// `0` = auto (logical cores, capped).
     SetAsrThreads(usize),
+    CheckForUpdates,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,4 +52,15 @@ pub enum AppEvent {
     SecondInstanceWake,
     /// ASR worker finished loading the speech model (overlay grow animation).
     AsrModelReady,
+    UpdateNotNeeded,
+    UpdateAvailable {
+        version: String,
+        download_url: String,
+    },
+    UpdateReady {
+        msi_path: String,
+    },
+    UpdateFailed {
+        message: String,
+    },
 }

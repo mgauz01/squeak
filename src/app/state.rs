@@ -30,6 +30,18 @@ impl Default for StateMachine {
     }
 }
 
+/// States where an in-app MSI update must not start.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn is_update_blocked_state(state: AppState) -> bool {
+    matches!(
+        state,
+        AppState::RecordingPtt
+            | AppState::RecordingHandsFree
+            | AppState::Processing
+            | AppState::Injecting
+    )
+}
+
 impl StateMachine {
     pub fn new() -> Self {
         Self::default()
@@ -193,6 +205,14 @@ mod tests {
         })
         .unwrap();
         assert_eq!(sm.state(), AppState::RecordingPtt);
+    }
+
+    #[test]
+    fn update_blocked_while_recording_or_processing() {
+        assert!(is_update_blocked_state(AppState::RecordingPtt));
+        assert!(is_update_blocked_state(AppState::Processing));
+        assert!(is_update_blocked_state(AppState::Injecting));
+        assert!(!is_update_blocked_state(AppState::Idle));
     }
 
     #[test]

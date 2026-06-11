@@ -8,3 +8,5 @@ pub mod focus;
 pub mod http;
 #[cfg(windows)]
 pub mod process;
+#[cfg(windows)]
+pub mod update;
