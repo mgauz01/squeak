@@ -562,7 +562,9 @@ unsafe fn paint_overlay(
         for band in 0..SHELL_BANDS {
             let t = band as f32 / (SHELL_BANDS - 1) as f32;
             let (r, g, b) = lerp_rgb((8, 0, 14), (72, 18, 88), 1.0 - t);
-            state.cached_shell_brushes.push(CreateSolidBrush(colorref(r, g, b)));
+            state
+                .cached_shell_brushes
+                .push(CreateSolidBrush(colorref(r, g, b)));
         }
     }
 
@@ -704,7 +706,9 @@ unsafe fn paint_gloss(
         for row in 0..GLOSS_ROWS {
             let t = row as f32 / (GLOSS_ROWS - 1) as f32;
             let (r, g, b) = lerp_rgb((168, 98, 178), (105, 42, 118), t);
-            state.cached_gloss_brushes.push(CreateSolidBrush(colorref(r, g, b)));
+            state
+                .cached_gloss_brushes
+                .push(CreateSolidBrush(colorref(r, g, b)));
         }
     }
 
