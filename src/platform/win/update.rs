@@ -31,10 +31,16 @@ pub enum UpdateError {
     Release(#[from] ReleaseError),
 
     #[error("download failed: {0}")]
-    Download(#[from] String),
+    Download(String),
 
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
+}
+
+impl From<String> for UpdateError {
+    fn from(msg: String) -> Self {
+        Self::Download(msg)
+    }
 }
 
 /// True when the running executable lives under `Program Files\Squeak\`.
