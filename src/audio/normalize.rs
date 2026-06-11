@@ -1,7 +1,5 @@
 //! Peak normalization and capture diagnostics before ASR.
 
-use std::path::Path;
-
 use tracing::info;
 
 pub const TARGET_PEAK: f32 = 0.7;
@@ -19,11 +17,20 @@ pub struct AudioStats {
 }
 
 pub fn analyze(samples: &[f32]) -> AudioStats {
-    let peak = samples.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
+    let mut peak = 0.0f32;
+    let mut sum_sq = 0.0f32;
+
+    for &s in samples {
+        let abs = s.abs();
+        if abs > peak {
+            peak = abs;
+        }
+        sum_sq += s * s;
+    }
+
     let rms = if samples.is_empty() {
         0.0
     } else {
-        let sum_sq: f32 = samples.iter().map(|s| s * s).sum();
         (sum_sq / samples.len() as f32).sqrt()
     };
     let duration_ms = (samples.len() as u64 * 1000) / crate::audio::TARGET_SAMPLE_RATE as u64;
@@ -38,21 +45,18 @@ pub fn analyze(samples: &[f32]) -> AudioStats {
 }
 
 /// Scale quiet captures up and hot captures down toward `TARGET_PEAK`.
+///
+/// Consolidates analysis and gain application into fewer passes (2 passes total).
 pub fn peak_normalize(samples: &mut [f32]) -> AudioStats {
     let mut stats = analyze(samples);
-    if samples.is_empty() {
+    if stats.samples == 0 || stats.peak <= 0.0 {
         return stats;
     }
 
-    let peak = stats.peak;
-    if peak <= 0.0 {
-        return stats;
-    }
-
-    let gain = if peak < QUIET_THRESHOLD {
-        TARGET_PEAK / peak
-    } else if peak > HOT_THRESHOLD {
-        HOT_ATTENUATION / peak
+    let gain = if stats.peak < QUIET_THRESHOLD {
+        TARGET_PEAK / stats.peak
+    } else if stats.peak > HOT_THRESHOLD {
+        HOT_ATTENUATION / stats.peak
     } else {
         1.0
     };
@@ -63,7 +67,10 @@ pub fn peak_normalize(samples: &mut [f32]) -> AudioStats {
         }
     }
 
-    stats.normalized_peak = samples.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
+    // Since TARGET_PEAK and HOT_ATTENUATION are <= 1.0, the new peak
+    // is exactly stats.peak * gain (clamping doesn't change it).
+    stats.normalized_peak = stats.peak * gain;
+
     stats
 }
 

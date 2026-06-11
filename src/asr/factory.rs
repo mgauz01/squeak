@@ -13,16 +13,20 @@ use crate::asr::parakeet::ParakeetEngine;
 
 /// Load the ONNX engine for `model` from `model_dir` (already verified on disk).
 #[cfg(windows)]
-pub fn create_engine(model: AsrModelId, model_dir: &Path) -> Result<Box<dyn AsrEngine>, AsrError> {
+pub fn create_engine(
+    model: AsrModelId,
+    model_dir: &Path,
+    threads: usize,
+) -> Result<Box<dyn AsrEngine>, AsrError> {
     match model {
         AsrModelId::Moonshine(tier) => {
-            Ok(Box::new(MoonshineEngine::load_from_dir(model_dir, tier)?))
+            Ok(Box::new(MoonshineEngine::load_from_dir(model_dir, tier, threads)?))
         }
         #[cfg(feature = "parakeet")]
-        AsrModelId::Parakeet => Ok(Box::new(ParakeetEngine::load_from_dir(model_dir)?)),
+        AsrModelId::Parakeet => Ok(Box::new(ParakeetEngine::load_from_dir(model_dir, threads)?)),
         #[cfg(feature = "cohere")]
-        AsrModelId::Cohere => Ok(Box::new(CohereEngine::load_from_dir(model_dir)?)),
+        AsrModelId::Cohere => Ok(Box::new(CohereEngine::load_from_dir(model_dir, threads)?)),
         #[cfg(feature = "canary")]
-        AsrModelId::Canary => Ok(Box::new(CanaryEngine::load_from_dir(model_dir)?)),
+        AsrModelId::Canary => Ok(Box::new(CanaryEngine::load_from_dir(model_dir, threads)?)),
     }
 }

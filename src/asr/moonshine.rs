@@ -3,6 +3,7 @@
 //! The streaming frontend expects fixed **1280-sample** chunks (`CHUNK_SIZE` in
 //! `transcribe-rs`). Partial tail chunks crash the Conv node unless padded to
 //! 1280 with silence before inference.
+use std::borrow::Cow;
 use std::path::Path;
 
 use tracing::{info, warn};
@@ -32,7 +33,7 @@ impl MoonshineEngine {
         Self::load_from_dir(&dir, tier)
     }
 
-    pub fn load_from_dir(dir: &Path, tier: ModelTier) -> Result<Self, AsrError> {
+    pub fn load_from_dir(dir: &Path, tier: ModelTier, threads: usize) -> Result<Self, AsrError> {
         let model = AsrModelId::moonshine(tier);
         if !model_is_complete(model, dir) {
             return Err(AsrError::Other(format!(
@@ -41,8 +42,7 @@ impl MoonshineEngine {
             )));
         }
 
-        info!("Loading Moonshine streaming model from {}", dir.display());
-        let threads = recommended_thread_count();
+        info!("Loading Moonshine streaming model from {} ({} threads)", dir.display(), threads);
         let inner = StreamingModel::load(dir, threads, &Quantization::default())
             .map_err(|e| AsrError::Transcription(e.to_string()))?;
 
@@ -95,14 +95,16 @@ impl AsrEngine for MoonshineEngine {
 }
 
 /// Partial final chunks (e.g. len % 1280 == 4) crash the Moonshine frontend Conv node.
-fn pad_to_streaming_chunks(samples: &[f32]) -> Vec<f32> {
+///
+/// Returns a `Cow` to avoid cloning when the input is already a multiple of 1280.
+fn pad_to_streaming_chunks(samples: &[f32]) -> Cow<'_, [f32]> {
     let rem = samples.len() % STREAMING_CHUNK_SAMPLES;
     if rem == 0 {
-        return samples.to_vec();
+        return Cow::Borrowed(samples);
     }
     let mut padded = samples.to_vec();
     padded.resize(samples.len() + STREAMING_CHUNK_SAMPLES - rem, 0.0);
-    padded
+    Cow::Owned(padded)
 }
 
 #[cfg(test)]
