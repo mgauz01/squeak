@@ -41,7 +41,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
              legacy:   asr_bench clip.wav --tiers tiny,small,medium",
     )?;
 
-    let models = parse_models(args.next().as_deref())?;
+    let models = parse_models_args(&mut args)?;
     let wav = Path::new(&wav_path);
     if !wav.is_file() {
         return Err(format!("WAV file not found: {wav_path}").into());
@@ -74,20 +74,33 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[cfg(windows)]
-fn parse_models(arg: Option<&str>) -> Result<Vec<AsrModelId>, Box<dyn std::error::Error>> {
-    let Some(raw) = arg else {
+fn parse_models_args(
+    args: &mut impl Iterator<Item = String>,
+) -> Result<Vec<AsrModelId>, Box<dyn std::error::Error>> {
+    let Some(raw) = args.next() else {
         return Ok(AsrModelId::MOONSHINE_ALL.to_vec());
     };
 
-    let list = raw
-        .strip_prefix("--models")
-        .or_else(|| raw.strip_prefix("--tiers"))
-        .ok_or_else(|| format!("unexpected argument: {raw}"))?;
-    let list = list.trim_start_matches('=').trim();
+    let list = if raw == "--models" || raw == "--tiers" {
+        args.next()
+            .ok_or_else(|| format!("missing model list after {raw}"))?
+    } else if let Some(rest) = raw.strip_prefix("--models") {
+        rest.trim_start_matches('=').trim().to_string()
+    } else if let Some(rest) = raw.strip_prefix("--tiers") {
+        rest.trim_start_matches('=').trim().to_string()
+    } else {
+        return Err(format!("unexpected argument: {raw}").into());
+    };
+
     if list.is_empty() {
         return Err("missing model list after --models".into());
     }
 
+    parse_model_list(&list)
+}
+
+#[cfg(windows)]
+fn parse_model_list(list: &str) -> Result<Vec<AsrModelId>, Box<dyn std::error::Error>> {
     let mut models = Vec::new();
     for part in list.split(',') {
         let part = part.trim();
