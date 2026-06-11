@@ -21,7 +21,7 @@ pub struct CohereEngine {
 
 #[cfg(all(windows, feature = "cohere"))]
 impl CohereEngine {
-    pub fn load_from_dir(dir: &Path, threads: usize) -> Result<Self, AsrError> {
+    pub fn load_from_dir(dir: &Path, _threads: usize) -> Result<Self, AsrError> {
         if !model_is_complete(AsrModelId::Cohere, dir) {
             return Err(AsrError::Other(format!(
                 "Cohere model files missing in {}",
@@ -29,12 +29,8 @@ impl CohereEngine {
             )));
         }
 
-        info!(
-            "Loading Cohere model from {} ({} threads)",
-            dir.display(),
-            threads
-        );
-        let inner = CohereModel::load(dir, threads, &Quantization::Int8)
+        info!("Loading Cohere model from {}", dir.display());
+        let inner = CohereModel::load(dir, &Quantization::Int8)
             .map_err(|e| AsrError::Transcription(e.to_string()))?;
         Ok(Self { inner })
     }

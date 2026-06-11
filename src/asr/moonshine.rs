@@ -30,7 +30,7 @@ impl MoonshineEngine {
             AsrError::Other(format!("not a Moonshine model: {}", model.config_key()))
         })?;
         let dir = model_dir(model);
-        Self::load_from_dir(&dir, tier)
+        Self::load_from_dir(&dir, tier, recommended_thread_count())
     }
 
     pub fn load_from_dir(dir: &Path, tier: ModelTier, threads: usize) -> Result<Self, AsrError> {
