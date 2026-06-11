@@ -632,7 +632,7 @@ unsafe fn paint_overlay(
     if state.phase == UiPhase::Armed {
         paint_ptt_hold_bar(hdc, inner, state.grow_start_ms);
     } else {
-        paint_volume_bars(hdc, inner, state.phase, &state.meter, state);
+        paint_volume_bars(hdc, inner, state);
     }
 
     let _ = SelectClipRgn(hdc, HRGN::default());
@@ -732,8 +732,6 @@ unsafe fn paint_gloss(
 unsafe fn paint_volume_bars(
     hdc: windows::Win32::Graphics::Gdi::HDC,
     inner: windows::Win32::Foundation::RECT,
-    phase: UiPhase,
-    meter: &AudioLevelMeter,
     state: &mut OverlayWindowState,
 ) {
     if state.cached_volume_bar_brush.is_invalid() {
@@ -749,11 +747,14 @@ unsafe fn paint_volume_bars(
     let center_y = (inner.top + inner.bottom) / 2;
     let max_half = ((inner.bottom - inner.top) / 2 - 2).max(3);
 
-    let levels = if matches!(phase, UiPhase::RecordingPtt | UiPhase::RecordingHandsFree) {
-        meter.bar_levels()
+    let levels = if matches!(
+        state.phase,
+        UiPhase::RecordingPtt | UiPhase::RecordingHandsFree
+    ) {
+        state.meter.bar_levels()
     } else {
         // Processing: gentle decay of last captured levels.
-        meter.bar_levels().map(|l| (l * 0.55).max(0.08))
+        state.meter.bar_levels().map(|l| (l * 0.55).max(0.08))
     };
 
     for (i, level) in levels.iter().enumerate() {
@@ -765,7 +766,6 @@ unsafe fn paint_volume_bars(
     }
 
     let _ = SelectObject(hdc, old);
-    let _ = DeleteObject(bar_brush);
 }
 
 fn colorref(r: u8, g: u8, b: u8) -> COLORREF {
