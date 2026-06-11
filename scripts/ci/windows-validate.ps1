@@ -9,6 +9,9 @@ if (-not (Test-Path $fixture)) {
 Write-Host '=== cargo check --release ==='
 cargo check --release --features parakeet
 
+Write-Host '=== cargo build --release (squeak bin) ==='
+cargo build --release --bin squeak --features parakeet
+
 Write-Host '=== ASR smoke ==='
 cargo run --example asr_smoke --release -- $fixture
 
