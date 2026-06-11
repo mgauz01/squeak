@@ -296,7 +296,7 @@ fn load_engine(
         state.ort.xnnpack && !on_directml,
     );
     state.loaded_on_directml = on_directml;
-    state.engine = Some(create_engine(model, dir)?);
+    state.engine = Some(create_engine(model, dir, state.ort.threads)?);
     state.loaded = Some(model);
     warmup_engine(state);
     info!("Speech model warm-loaded: {}", model.config_key());
