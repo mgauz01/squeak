@@ -42,6 +42,7 @@ directml = ["transcribe-rs/ort-directml"]
 
 [dependencies]
 crossbeam-channel = "0.5"
+regex = "1.12.4"
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 toml = "0.8"

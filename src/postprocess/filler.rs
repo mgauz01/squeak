@@ -1,3 +1,6 @@
+use regex::{Regex, RegexBuilder};
+use std::sync::OnceLock;
+
 use super::context::InputContext;
 
 const PROSE_FILLERS: &[&str] = &[
@@ -6,48 +9,38 @@ const PROSE_FILLERS: &[&str] = &[
 
 const CODE_FILLERS: &[&str] = &["um", "uh"];
 
+static PROSE_REGEX: OnceLock<Regex> = OnceLock::new();
+static CODE_REGEX: OnceLock<Regex> = OnceLock::new();
+
+fn get_filler_regex(context: InputContext) -> &'static Regex {
+    match context {
+        InputContext::Prose => PROSE_REGEX.get_or_init(|| build_regex(PROSE_FILLERS)),
+        InputContext::CodeEditor => CODE_REGEX.get_or_init(|| build_regex(CODE_FILLERS)),
+    }
+}
+
+fn build_regex(fillers: &[&str]) -> Regex {
+    // Build a regex that matches any of the fillers as whole words, case-insensitively.
+    // \b is a word boundary.
+    let patterns: Vec<String> = fillers.iter().map(|f| format!(r"\b{}\b\s*", f)).collect();
+    let pattern = format!(r"(?i){}", patterns.join("|"));
+    RegexBuilder::new(&pattern)
+        .case_insensitive(true)
+        .build()
+        .expect("Failed to build filler regex")
+}
+
 pub fn strip_fillers(text: &str, context: InputContext) -> String {
-    let fillers = match context {
-        InputContext::Prose => PROSE_FILLERS,
-        InputContext::CodeEditor => CODE_FILLERS,
-    };
-
-    let mut result = text.to_string();
-    for filler in fillers {
-        result = remove_filler_phrase(&result, filler);
+    if text.is_empty() {
+        return String::new();
     }
-    normalize_whitespace(&result)
-}
 
-fn remove_filler_phrase(text: &str, filler: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let lower: String = text.to_ascii_lowercase();
-    let bytes = text.as_bytes();
-    let mut i = 0;
+    let re = get_filler_regex(context);
+    // Replace all fillers with an empty string.
+    // Regex::replace_all returns a Cow<str>, avoiding allocation if no matches.
+    let stripped = re.replace_all(text, "");
 
-    while i < bytes.len() {
-        if lower[i..].starts_with(filler)
-            && is_boundary_before(&lower, i)
-            && is_boundary_after(&lower, i + filler.len())
-        {
-            i += filler.len();
-            while i < bytes.len() && bytes[i].is_ascii_whitespace() {
-                i += 1;
-            }
-            continue;
-        }
-        out.push(bytes[i] as char);
-        i += 1;
-    }
-    out
-}
-
-fn is_boundary_before(lower: &str, idx: usize) -> bool {
-    idx == 0 || !lower.as_bytes()[idx - 1].is_ascii_alphanumeric()
-}
-
-fn is_boundary_after(lower: &str, idx: usize) -> bool {
-    idx >= lower.len() || !lower.as_bytes()[idx].is_ascii_alphanumeric()
+    normalize_whitespace(&stripped)
 }
 
 fn normalize_whitespace(text: &str) -> String {
@@ -71,5 +64,11 @@ mod tests {
         let out = strip_fillers("like um hello", InputContext::CodeEditor);
         assert!(out.contains("like"));
         assert!(!out.contains("um"));
+    }
+
+    #[test]
+    fn handles_punctuation() {
+        let out = strip_fillers("Hello, um, world!", InputContext::Prose);
+        assert_eq!(out, "Hello, , world!");
     }
 }

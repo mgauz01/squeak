@@ -4,6 +4,7 @@ mod grammar;
 mod punctuation;
 
 pub use context::{detect_context_from_process, InputContext};
+pub use filler::strip_fillers;
 pub use grammar::engine::MockGrammarPolisher;
 
 #[cfg(windows)]
