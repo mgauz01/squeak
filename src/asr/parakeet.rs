@@ -27,7 +27,7 @@ pub struct ParakeetEngine {
 
 #[cfg(all(windows, feature = "parakeet"))]
 impl ParakeetEngine {
-    pub fn load_from_dir(dir: &Path) -> Result<Self, AsrError> {
+    pub fn load_from_dir(dir: &Path, threads: usize) -> Result<Self, AsrError> {
         if !model_is_complete(AsrModelId::Parakeet, dir) {
             return Err(AsrError::Other(format!(
                 "Parakeet model files missing in {}",
@@ -35,8 +35,8 @@ impl ParakeetEngine {
             )));
         }
 
-        info!("Loading Parakeet model from {}", dir.display());
-        let inner = ParakeetModel::load(dir, &Quantization::Int8)
+        info!("Loading Parakeet model from {} ({} threads)", dir.display(), threads);
+        let inner = ParakeetModel::load(dir, threads, &Quantization::Int8)
             .map_err(|e| AsrError::Transcription(e.to_string()))?;
         Ok(Self { inner })
     }

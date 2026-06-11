@@ -17,3 +17,7 @@
 ## 2025-05-15 - [Zero-copy ASR Padding]
 **Learning:** The Moonshine engine requires audio in 1280-sample chunks. Cloning the entire buffer just to add trailing zeros is wasteful when the buffer is already aligned or can be borrowed.
 **Action:** Use `std::borrow::Cow` for buffer conditioning before inference. This allows bypassing allocations for correctly-sized inputs, saving time and memory on the hot path.
+
+## 2025-05-15 - [Model Loading Parallelism]
+**Learning:** Parakeet, Cohere, and Canary models were using default thread counts even when the user had configured a specific `asr_threads` value. Only Moonshine was honoring the setting.
+**Action:** Ensure thread budget parameters are propagated through all factory methods to every model backend to ensure consistent performance behavior across different ASR models.

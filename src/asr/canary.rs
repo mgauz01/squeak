@@ -21,7 +21,7 @@ pub struct CanaryEngine {
 
 #[cfg(all(windows, feature = "canary"))]
 impl CanaryEngine {
-    pub fn load_from_dir(dir: &Path) -> Result<Self, AsrError> {
+    pub fn load_from_dir(dir: &Path, threads: usize) -> Result<Self, AsrError> {
         if !model_is_complete(AsrModelId::Canary, dir) {
             return Err(AsrError::Other(format!(
                 "Canary model files missing in {}",
@@ -29,8 +29,8 @@ impl CanaryEngine {
             )));
         }
 
-        info!("Loading Canary model from {}", dir.display());
-        let inner = CanaryModel::load(dir, &Quantization::Int8)
+        info!("Loading Canary model from {} ({} threads)", dir.display(), threads);
+        let inner = CanaryModel::load(dir, threads, &Quantization::Int8)
             .map_err(|e| AsrError::Transcription(e.to_string()))?;
         Ok(Self { inner })
     }
