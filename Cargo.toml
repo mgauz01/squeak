@@ -1,6 +1,6 @@
 [package]
 name = "squeak"
-version = "0.1.0"
+version = "0.1.2"
 edition = "2021"
 description = "Local Windows voice dictation (Wispr-core subset)"
 license = "MIT"
