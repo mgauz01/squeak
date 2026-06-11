@@ -13,3 +13,7 @@
 ## 2025-05-15 - [GDI Object Caching in Overlay]
 **Learning:** The recording overlay was creating and deleting ~800 GDI objects (brushes/regions) per second during active animations. This creates unnecessary kernel-mode transitions and syscall overhead.
 **Action:** Cache static GDI resources like solid brushes and regions that only change on window resize. Use `OverlayWindowState` to store these and ensure proper cleanup in `free_overlay_state`.
+
+## 2025-05-15 - [Zero-copy ASR Padding]
+**Learning:** The Moonshine engine requires audio in 1280-sample chunks. Cloning the entire buffer just to add trailing zeros is wasteful when the buffer is already aligned or can be borrowed.
+**Action:** Use `std::borrow::Cow` for buffer conditioning before inference. This allows bypassing allocations for correctly-sized inputs, saving time and memory on the hot path.
