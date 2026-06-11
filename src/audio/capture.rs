@@ -228,7 +228,8 @@ impl OnTheFlyResampler {
         }
 
         // 1. Downmix to mono (including any leftovers from last time)
-        let mut mono = Vec::with_capacity((data.len() + self.leftover_samples.len()) / self.channels as usize);
+        let mut mono =
+            Vec::with_capacity((data.len() + self.leftover_samples.len()) / self.channels as usize);
         let mut idx = 0;
 
         // Handle leftovers
@@ -346,7 +347,13 @@ mod tests {
         let direct_out = resampler2.process(&input);
 
         for (i, (&a, &b)) in chunked_out.iter().zip(direct_out.iter()).enumerate() {
-            assert!((a - b).abs() < 1e-6, "Mismatch at index {}: {} != {}", i, a, b);
+            assert!(
+                (a - b).abs() < 1e-6,
+                "Mismatch at index {}: {} != {}",
+                i,
+                a,
+                b
+            );
         }
     }
 }
