@@ -21,13 +21,15 @@ fn main() {
 }
 
 #[cfg(windows)]
+use squeak::config::AsrModelId;
+
+#[cfg(windows)]
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     use std::env;
     use std::path::Path;
     use std::time::Instant;
 
     use squeak::asr::AsrWorker;
-    use squeak::config::AsrModelId;
 
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
