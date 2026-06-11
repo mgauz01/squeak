@@ -20,6 +20,11 @@ path = "examples/asr_smoke.rs"
 required-features = []
 
 [[example]]
+name = "asr_bench"
+path = "examples/asr_bench.rs"
+required-features = []
+
+[[example]]
 name = "gec_smoke"
 path = "examples/gec_smoke.rs"
 required-features = ["gec-tiny"]
@@ -42,7 +47,10 @@ directml = ["transcribe-rs/ort-directml"]
 
 [dependencies]
 crossbeam-channel = "0.5"
+regex = "1.12.4"
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+semver = "1"
 thiserror = "2"
 toml = "0.8"
 tracing = "0.1"

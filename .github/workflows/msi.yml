@@ -6,8 +6,78 @@ on:
     tags:
       - "v*"
 
+concurrency:
+  group: msi-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  validate-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: cargo fmt -- --check
+
+      - name: Clippy
+        run: cargo clippy -- -D warnings
+
+      - name: Unit tests
+        run: cargo test
+
+  validate-windows:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+
+      - name: Add MSVC dev environment
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Prepare models cache directory
+        shell: pwsh
+        run: |
+          $models = Join-Path $env:LOCALAPPDATA 'Squeak\models'
+          New-Item -ItemType Directory -Force -Path $models | Out-Null
+          "MODELS_CACHE_PATH=$models" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Cache speech models
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.MODELS_CACHE_PATH }}
+          key: squeak-models-${{ runner.os }}-parakeet-v1
+          restore-keys: |
+            squeak-models-${{ runner.os }}-
+
+      - name: Windows validation (check + smoke + bench)
+        shell: pwsh
+        run: ./scripts/ci/windows-validate.ps1
+
+      - name: Upload ASR bench log
+        uses: actions/upload-artifact@v4
+        with:
+          name: asr-bench-${{ github.sha }}
+          path: asr-bench.log
+          if-no-files-found: error
+
   build-msi:
+    needs: [validate-linux, validate-windows]
     runs-on: windows-latest
     steps:
       - name: Checkout
@@ -15,6 +85,9 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
 
       - name: Add MSVC dev environment
         uses: ilammy/msvc-dev-cmd@v1

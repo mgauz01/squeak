@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -8,7 +9,7 @@ use crossbeam_channel::Receiver;
 use tracing::{info, warn};
 
 use crate::app::single_instance::SingleInstance;
-use crate::app::state::{AppState, StateMachine, TransitionError};
+use crate::app::state::{is_update_blocked_state, AppState, StateMachine, TransitionError};
 use crate::app::{AppEvent, UserAction};
 use crate::asr::{ort_accelerator_summary, AsrError, AsrWorker, AsrWorkerConfig};
 use crate::audio::{
@@ -40,6 +41,7 @@ pub struct AppRuntime {
     audio_meter: Arc<AudioLevelMeter>,
     mic_armed: bool,
     injection_target: Option<FocusTarget>,
+    update_in_progress: AtomicBool,
     _single_instance: SingleInstance,
 }
 
@@ -85,6 +87,7 @@ impl AppRuntime {
             audio_meter,
             mic_armed: false,
             injection_target: None,
+            update_in_progress: AtomicBool::new(false),
             _single_instance: single_instance,
         })
     }
@@ -138,6 +141,30 @@ impl AppRuntime {
             self.running.store(false, Ordering::Relaxed);
             self.sync_ui();
             return Ok(());
+        }
+
+        if matches!(event, AppEvent::UserAction(UserAction::CheckForUpdates)) {
+            return self.handle_check_for_updates();
+        }
+
+        if matches!(event, AppEvent::UpdateNotNeeded) {
+            return self.handle_update_not_needed();
+        }
+
+        if let AppEvent::UpdateAvailable {
+            version,
+            download_url,
+        } = event
+        {
+            return self.handle_update_available(version, download_url);
+        }
+
+        if let AppEvent::UpdateReady { msi_path } = event {
+            return self.handle_update_ready(msi_path);
+        }
+
+        if let AppEvent::UpdateFailed { message } = event {
+            return self.handle_update_failed(message);
         }
 
         if matches!(event, AppEvent::UserAction(UserAction::PasteLast)) {
@@ -624,6 +651,111 @@ impl AppRuntime {
             .apply(AppEvent::DismissError)
             .map_err(RuntimeError::State)?;
         self.sync_ui();
+        Ok(())
+    }
+
+    fn handle_check_for_updates(&mut self) -> Result<(), RuntimeError> {
+        if self.update_in_progress.swap(true, Ordering::SeqCst) {
+            info!("Update check already in progress");
+            return Ok(());
+        }
+
+        if !crate::platform::win::update::is_msi_install() {
+            self.update_in_progress.store(false, Ordering::SeqCst);
+            eprintln!(
+                "In-app updates require the MSI install (Program Files\\Squeak). \
+                 Install from GitHub Releases or build with cargo for development."
+            );
+            return Ok(());
+        }
+
+        if is_update_blocked_state(self.state.state()) {
+            self.update_in_progress.store(false, Ordering::SeqCst);
+            eprintln!("Cannot check for updates while dictating or processing speech.");
+            return Ok(());
+        }
+
+        let event_tx = self.event_tx.clone();
+        let current = env!("CARGO_PKG_VERSION").to_string();
+        std::thread::spawn(move || {
+            match crate::platform::win::update::check_for_upgrade(&current) {
+                Ok(Some(update)) => {
+                    let _ = event_tx.send(AppEvent::UpdateAvailable {
+                        version: update.version.to_string(),
+                        download_url: update.msi_url,
+                    });
+                }
+                Ok(None) => {
+                    let _ = event_tx.send(AppEvent::UpdateNotNeeded);
+                }
+                Err(err) => {
+                    let _ = event_tx.send(AppEvent::UpdateFailed {
+                        message: err.to_string(),
+                    });
+                }
+            }
+        });
+        eprintln!("Checking for updates…");
+        Ok(())
+    }
+
+    fn handle_update_not_needed(&mut self) -> Result<(), RuntimeError> {
+        self.update_in_progress.store(false, Ordering::SeqCst);
+        eprintln!("Squeak {} is up to date.", env!("CARGO_PKG_VERSION"));
+        Ok(())
+    }
+
+    fn handle_update_available(
+        &mut self,
+        version: String,
+        download_url: String,
+    ) -> Result<(), RuntimeError> {
+        let current = env!("CARGO_PKG_VERSION");
+        let parsed = semver::Version::parse(&version)
+            .map_err(|err| RuntimeError::Message(err.to_string()))?;
+
+        if !crate::platform::win::update::confirm_update_dialog(current, &parsed) {
+            self.update_in_progress.store(false, Ordering::SeqCst);
+            eprintln!("Update cancelled.");
+            return Ok(());
+        }
+
+        eprintln!("Downloading Squeak {version}…");
+        let event_tx = self.event_tx.clone();
+        std::thread::spawn(move || {
+            let send_failure = |message: String| {
+                let _ = event_tx.send(AppEvent::UpdateFailed { message });
+            };
+            let Ok(ver) = semver::Version::parse(&version) else {
+                send_failure(format!("invalid version: {version}"));
+                return;
+            };
+            match crate::platform::win::update::download_msi(&download_url, &ver) {
+                Ok(path) => {
+                    let _ = event_tx.send(AppEvent::UpdateReady {
+                        msi_path: path.display().to_string(),
+                    });
+                }
+                Err(err) => send_failure(err.to_string()),
+            }
+        });
+        Ok(())
+    }
+
+    fn handle_update_ready(&mut self, msi_path: String) -> Result<(), RuntimeError> {
+        crate::platform::win::update::launch_upgrade(Path::new(&msi_path))
+            .map_err(runtime_io_err)?;
+        eprintln!("Installing update — Squeak will restart.");
+        self.update_in_progress.store(false, Ordering::SeqCst);
+        self.running.store(false, Ordering::Relaxed);
+        self.sync_ui();
+        Ok(())
+    }
+
+    fn handle_update_failed(&mut self, message: String) -> Result<(), RuntimeError> {
+        self.update_in_progress.store(false, Ordering::SeqCst);
+        eprintln!("Update failed: {message}");
+        warn!("update failed: {message}");
         Ok(())
     }
 }

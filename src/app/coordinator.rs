@@ -10,6 +10,12 @@ pub struct Coordinator {
     event_rx: Receiver<AppEvent>,
 }
 
+impl Default for Coordinator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Coordinator {
     pub fn new() -> Self {
         let (event_tx, event_rx) = crossbeam_channel::unbounded();
