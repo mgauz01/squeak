@@ -31,7 +31,7 @@ pub enum UpdateError {
     Release(#[from] ReleaseError),
 
     #[error("download failed: {0}")]
-    Download(String),
+    Download(#[from] String),
 
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
