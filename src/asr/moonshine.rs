@@ -30,10 +30,10 @@ impl MoonshineEngine {
             AsrError::Other(format!("not a Moonshine model: {}", model.config_key()))
         })?;
         let dir = model_dir(model);
-        Self::load_from_dir(&dir, tier)
+        Self::load_from_dir(&dir, tier, recommended_thread_count())
     }
 
-    pub fn load_from_dir(dir: &Path, tier: ModelTier) -> Result<Self, AsrError> {
+    pub fn load_from_dir(dir: &Path, tier: ModelTier, threads: usize) -> Result<Self, AsrError> {
         let model = AsrModelId::moonshine(tier);
         if !model_is_complete(model, dir) {
             return Err(AsrError::Other(format!(
@@ -42,8 +42,11 @@ impl MoonshineEngine {
             )));
         }
 
-        info!("Loading Moonshine streaming model from {}", dir.display());
-        let threads = recommended_thread_count();
+        info!(
+            "Loading Moonshine streaming model from {} ({} threads)",
+            dir.display(),
+            threads
+        );
         let inner = StreamingModel::load(dir, threads, &Quantization::default())
             .map_err(|e| AsrError::Transcription(e.to_string()))?;
 
