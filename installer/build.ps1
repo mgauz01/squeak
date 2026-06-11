@@ -95,7 +95,7 @@ $heat = Find-WixTool -Name "heat"
 
 $pkg = Get-CargoPackageInfo
 $productVersion = ConvertTo-WixVersion -Version $pkg.version
-$manufacturer = if ($pkg.authors.Count -gt 0) { $pkg.authors[0] } else { "Squeak Contributors" }
+$manufacturer = if (@($pkg.authors).Count -gt 0) { $pkg.authors[0] } else { "Squeak Contributors" }
 
 Write-Host "Building squeak $productVersion (features: $Features)..." -ForegroundColor Cyan
 
@@ -133,7 +133,7 @@ New-Item -ItemType Directory -Force -Path $distDir | Out-Null
 
 Copy-Item (Join-Path $releaseDir "squeak.exe") $stagingDir
 
-$dlls = Get-ChildItem -Path $releaseDir -Filter "*.dll" -File
+$dlls = @(Get-ChildItem -Path $releaseDir -Filter "*.dll" -File)
 if ($dlls.Count -eq 0) {
     Write-Warning "No DLLs found next to squeak.exe; MSI will contain only the executable."
 } else {
@@ -154,6 +154,7 @@ if ($dlls.Count -gt 0) {
         -var var.DllDir `
         -sfrag `
         -srd `
+        -sreg `
         -gg `
         -ag `
         -out $harvestedWxs
@@ -202,7 +203,7 @@ if ($LASTEXITCODE -ne 0) {
     throw "candle failed"
 }
 
-$wixobjs = Get-ChildItem $wixobjDir -Filter "*.wixobj"
+$wixobjs = @(Get-ChildItem $wixobjDir -Filter "*.wixobj")
 if ($wixobjs.Count -eq 0) {
     throw "No .wixobj files produced"
 }
