@@ -3,6 +3,7 @@
 //! The streaming frontend expects fixed **1280-sample** chunks (`CHUNK_SIZE` in
 //! `transcribe-rs`). Partial tail chunks crash the Conv node unless padded to
 //! 1280 with silence before inference.
+use std::borrow::Cow;
 use std::path::Path;
 
 use tracing::{info, warn};
@@ -95,14 +96,16 @@ impl AsrEngine for MoonshineEngine {
 }
 
 /// Partial final chunks (e.g. len % 1280 == 4) crash the Moonshine frontend Conv node.
-fn pad_to_streaming_chunks(samples: &[f32]) -> Vec<f32> {
+///
+/// Returns a `Cow` to avoid cloning when the input is already a multiple of 1280.
+fn pad_to_streaming_chunks(samples: &[f32]) -> Cow<'_, [f32]> {
     let rem = samples.len() % STREAMING_CHUNK_SAMPLES;
     if rem == 0 {
-        return samples.to_vec();
+        return Cow::Borrowed(samples);
     }
     let mut padded = samples.to_vec();
     padded.resize(samples.len() + STREAMING_CHUNK_SAMPLES - rem, 0.0);
-    padded
+    Cow::Owned(padded)
 }
 
 #[cfg(test)]
@@ -165,7 +168,7 @@ pub fn configure_ort_runtime(
     model: AsrModelId,
     prefer_directml: bool,
     threads: usize,
-    use_xnnpack: bool,
+    _use_xnnpack: bool,
 ) {
     let threads = threads.max(1);
     // SAFETY: called on the ASR worker thread before any ORT sessions exist.
@@ -196,7 +199,7 @@ pub fn configure_ort_runtime(
     }
 
     #[cfg(feature = "xnnpack")]
-    if use_xnnpack {
+    if _use_xnnpack {
         if xnnpack_available() {
             use transcribe_rs::{set_ort_accelerator, OrtAccelerator};
             set_ort_accelerator(OrtAccelerator::Xnnpack);
@@ -225,7 +228,7 @@ pub fn configure_ort_runtime(
 pub fn ort_accelerator_summary(
     model: AsrModelId,
     prefer_directml: bool,
-    use_xnnpack: bool,
+    _use_xnnpack: bool,
 ) -> &'static str {
     if prefer_directml && model.compatible_with_directml() {
         #[cfg(feature = "directml")]
@@ -234,7 +237,7 @@ pub fn ort_accelerator_summary(
         }
     }
     #[cfg(feature = "xnnpack")]
-    if use_xnnpack && xnnpack_available() {
+    if _use_xnnpack && xnnpack_available() {
         return "XNNPACK";
     }
     "CPU"

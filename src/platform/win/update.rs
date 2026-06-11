@@ -37,6 +37,12 @@ pub enum UpdateError {
     Io(#[from] std::io::Error),
 }
 
+impl From<String> for UpdateError {
+    fn from(msg: String) -> Self {
+        Self::Download(msg)
+    }
+}
+
 /// True when the running executable lives under `Program Files\Squeak\`.
 pub fn is_msi_install() -> bool {
     std::env::current_exe()

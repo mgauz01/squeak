@@ -1,5 +1,8 @@
 //! Peak normalization and capture diagnostics before ASR.
 
+#[cfg(windows)]
+use std::path::Path;
+
 use tracing::info;
 
 pub const TARGET_PEAK: f32 = 0.7;

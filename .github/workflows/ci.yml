@@ -1,6 +1,6 @@
 name: CI
 
-# Runs only for merges to main and PRs targeting main — not feature-branch pushes.
+# Runs for merges to main and PRs targeting main — Linux, Windows, and MSI must all pass.
 on:
   push:
     branches:
@@ -36,3 +36,88 @@ jobs:
 
       - name: Unit tests
         run: cargo test
+
+  validate-windows:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+
+      - name: Add MSVC dev environment
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Prepare models cache directory
+        shell: pwsh
+        run: |
+          $models = Join-Path $env:LOCALAPPDATA 'Squeak\models'
+          New-Item -ItemType Directory -Force -Path $models | Out-Null
+          "MODELS_CACHE_PATH=$models" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Cache speech models
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.MODELS_CACHE_PATH }}
+          key: squeak-models-${{ runner.os }}-parakeet-v1
+          restore-keys: |
+            squeak-models-${{ runner.os }}-
+
+      - name: Windows validation (check + smoke + bench)
+        shell: pwsh
+        run: ./scripts/ci/windows-validate.ps1
+
+      - name: Upload ASR bench log
+        uses: actions/upload-artifact@v4
+        with:
+          name: asr-bench-${{ github.sha }}
+          path: asr-bench.log
+          if-no-files-found: error
+
+  build-msi:
+    needs: [validate-linux, validate-windows]
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+
+      - name: Add MSVC dev environment
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Ensure WiX Toolset
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (Get-Command candle -ErrorAction SilentlyContinue) {
+            Write-Host 'WiX already installed (candle on PATH).'
+            exit 0
+          }
+          $wixBin = "${env:ProgramFiles(x86)}\WiX Toolset v3.14\bin"
+          if (Test-Path (Join-Path $wixBin 'candle.exe')) {
+            Write-Host "WiX found at $wixBin"
+            echo "$wixBin" >> $env:GITHUB_PATH
+            exit 0
+          }
+          choco install wixtoolset -y --no-progress
+
+      - name: Build MSI
+        shell: pwsh
+        run: ./installer/build.ps1 -Features parakeet
+
+      - name: Upload MSI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: squeak-msi-${{ github.sha }}
+          path: dist/*.msi
+          if-no-files-found: error

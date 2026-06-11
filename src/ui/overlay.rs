@@ -12,7 +12,7 @@ use windows::Win32::Graphics::Gdi::{
     BeginPaint, CreateCompatibleDC, CreateDIBSection, CreateRoundRectRgn, CreateSolidBrush,
     DeleteDC, DeleteObject, EndPaint, FillRect, GetDC, GetMonitorInfoW, InvalidateRect,
     MonitorFromPoint, ReleaseDC, RoundRect, SelectClipRgn, SelectObject, AC_SRC_ALPHA, AC_SRC_OVER,
-    BITMAPINFO, BITMAPINFOHEADER, BI_RGB, BLENDFUNCTION, DIB_RGB_COLORS, HRGN, MONITORINFO,
+    BITMAPINFO, BITMAPINFOHEADER, BI_RGB, BLENDFUNCTION, DIB_RGB_COLORS, HBRUSH, HRGN, MONITORINFO,
     MONITOR_DEFAULTTOPRIMARY, PAINTSTRUCT,
 };
 use windows::Win32::System::SystemInformation::GetTickCount64;
@@ -71,6 +71,12 @@ struct OverlayWindowState {
     scale_start_ms: u64,
     current_width: i32,
     current_height: i32,
+    /// Cached brushes/regions to reduce GDI overhead in the render loop.
+    cached_shell_brushes: Vec<HBRUSH>,
+    cached_gloss_brushes: Vec<HBRUSH>,
+    cached_shade_brush: HBRUSH,
+    cached_volume_bar_brush: HBRUSH,
+    cached_inner_clip: HRGN,
 }
 
 pub fn spawn(
@@ -145,6 +151,11 @@ unsafe fn run_overlay(
         scale_start_ms: 0,
         current_width: PILL_MIN_WIDTH,
         current_height: OVERLAY_HEIGHT,
+        cached_shell_brushes: Vec::new(),
+        cached_gloss_brushes: Vec::new(),
+        cached_shade_brush: HBRUSH::default(),
+        cached_volume_bar_brush: HBRUSH::default(),
+        cached_inner_clip: HRGN::default(),
     });
     SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(state) as isize);
 
@@ -241,6 +252,13 @@ unsafe fn update_pill_geometry(hwnd: HWND, state: &mut OverlayWindowState) {
     if width != state.current_width || height != state.current_height {
         state.current_width = width;
         state.current_height = height;
+
+        // Invalidate cached region on resize
+        if !state.cached_inner_clip.is_invalid() {
+            let _ = DeleteObject(state.cached_inner_clip);
+            state.cached_inner_clip = HRGN::default();
+        }
+
         let x = state.anchor_center_x - width / 2;
         let y = state.anchor_bottom_y - height;
         let _ = SetWindowPos(
@@ -336,7 +354,22 @@ unsafe fn overlay_state_mut(hwnd: HWND) -> Option<&'static mut OverlayWindowStat
 unsafe fn free_overlay_state(hwnd: HWND) {
     let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut OverlayWindowState;
     if !ptr.is_null() {
-        drop(Box::from_raw(ptr));
+        let mut state = Box::from_raw(ptr);
+        for brush in state.cached_shell_brushes.drain(..) {
+            let _ = DeleteObject(brush);
+        }
+        for brush in state.cached_gloss_brushes.drain(..) {
+            let _ = DeleteObject(brush);
+        }
+        if !state.cached_shade_brush.is_invalid() {
+            let _ = DeleteObject(state.cached_shade_brush);
+        }
+        if !state.cached_volume_bar_brush.is_invalid() {
+            let _ = DeleteObject(state.cached_volume_bar_brush);
+        }
+        if !state.cached_inner_clip.is_invalid() {
+            let _ = DeleteObject(state.cached_inner_clip);
+        }
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
     }
 }
@@ -525,13 +558,20 @@ unsafe fn paint_overlay(
 
     // Convex dome: lighter crown, darker base. Silhouette AA is applied after paint.
     const SHELL_BANDS: i32 = 10;
+    if state.cached_shell_brushes.is_empty() {
+        for band in 0..SHELL_BANDS {
+            let t = band as f32 / (SHELL_BANDS - 1) as f32;
+            let (r, g, b) = lerp_rgb((8, 0, 14), (72, 18, 88), 1.0 - t);
+            state
+                .cached_shell_brushes
+                .push(CreateSolidBrush(colorref(r, g, b)));
+        }
+    }
+
     let band_h = (height + SHELL_BANDS - 1) / SHELL_BANDS;
-    for band in 0..SHELL_BANDS {
-        let y0 = band * band_h;
+    for (band, &brush) in state.cached_shell_brushes.iter().enumerate() {
+        let y0 = band as i32 * band_h;
         let y1 = (y0 + band_h).min(height);
-        let t = band as f32 / (SHELL_BANDS - 1) as f32;
-        let (r, g, b) = lerp_rgb((8, 0, 14), (72, 18, 88), 1.0 - t);
-        let brush = CreateSolidBrush(colorref(r, g, b));
         let strip = RECT {
             left: 0,
             top: y0,
@@ -539,18 +579,19 @@ unsafe fn paint_overlay(
             bottom: y1,
         };
         let _ = FillRect(hdc, &strip, brush);
-        let _ = DeleteObject(brush);
     }
 
-    let inner_clip = CreateRoundRectRgn(
-        inner.left,
-        inner.top,
-        inner.right,
-        inner.bottom,
-        inner_r,
-        inner_r,
-    );
-    let _ = SelectClipRgn(hdc, inner_clip);
+    if state.cached_inner_clip.is_invalid() {
+        state.cached_inner_clip = CreateRoundRectRgn(
+            inner.left,
+            inner.top,
+            inner.right,
+            inner.bottom,
+            inner_r,
+            inner_r,
+        );
+    }
+    let _ = SelectClipRgn(hdc, state.cached_inner_clip);
 
     let inner_w = inner.right - inner.left;
     let strip_w = (inner_w + PLASMA_STRIPS - 1) / PLASMA_STRIPS;
@@ -571,10 +612,12 @@ unsafe fn paint_overlay(
     }
 
     // Subtle top gloss (3D dome highlight) + bottom ambient shade.
-    paint_gloss(hdc, inner);
+    paint_gloss(hdc, inner, state);
 
     let shade_h = 3;
-    let shade = CreateSolidBrush(colorref(12, 0, 18));
+    if state.cached_shade_brush.is_invalid() {
+        state.cached_shade_brush = CreateSolidBrush(colorref(12, 0, 18));
+    }
     let _ = FillRect(
         hdc,
         &RECT {
@@ -583,18 +626,16 @@ unsafe fn paint_overlay(
             right: inner.right,
             bottom: inner.bottom,
         },
-        shade,
+        state.cached_shade_brush,
     );
-    let _ = DeleteObject(shade);
 
     if state.phase == UiPhase::Armed {
         paint_ptt_hold_bar(hdc, inner, state.grow_start_ms);
     } else {
-        paint_volume_bars(hdc, inner, state.phase, &state.meter);
+        paint_volume_bars(hdc, inner, state);
     }
 
     let _ = SelectClipRgn(hdc, HRGN::default());
-    let _ = DeleteObject(inner_clip);
 }
 
 /// Darker, inset plasma palette (purple → magenta → muted pink).
@@ -656,19 +697,28 @@ unsafe fn paint_ptt_hold_bar(
 unsafe fn paint_gloss(
     hdc: windows::Win32::Graphics::Gdi::HDC,
     inner: windows::Win32::Foundation::RECT,
+    state: &mut OverlayWindowState,
 ) {
     use windows::Win32::Foundation::RECT;
 
     const GLOSS_ROWS: i32 = 4;
+    if state.cached_gloss_brushes.is_empty() {
+        for row in 0..GLOSS_ROWS {
+            let t = row as f32 / (GLOSS_ROWS - 1) as f32;
+            let (r, g, b) = lerp_rgb((168, 98, 178), (105, 42, 118), t);
+            state
+                .cached_gloss_brushes
+                .push(CreateSolidBrush(colorref(r, g, b)));
+        }
+    }
+
     let row_h = 1.max((inner.bottom - inner.top) / 12);
     let inner_w = inner.right - inner.left;
 
-    for row in 0..GLOSS_ROWS {
-        let t = row as f32 / (GLOSS_ROWS - 1) as f32;
-        let (r, g, b) = lerp_rgb((168, 98, 178), (105, 42, 118), t);
+    for (row, &brush) in state.cached_gloss_brushes.iter().enumerate() {
+        let row = row as i32;
         // Narrower at the top row to suggest a curved reflective surface.
         let side_inset = (4 + row * 5).min(inner_w / 3);
-        let brush = CreateSolidBrush(colorref(r, g, b));
         let band = RECT {
             left: inner.left + side_inset,
             top: inner.top + row * row_h,
@@ -676,18 +726,18 @@ unsafe fn paint_gloss(
             bottom: inner.top + (row + 1) * row_h,
         };
         let _ = FillRect(hdc, &band, brush);
-        let _ = DeleteObject(brush);
     }
 }
 
 unsafe fn paint_volume_bars(
     hdc: windows::Win32::Graphics::Gdi::HDC,
     inner: windows::Win32::Foundation::RECT,
-    phase: UiPhase,
-    meter: &AudioLevelMeter,
+    state: &mut OverlayWindowState,
 ) {
-    let bar_brush = CreateSolidBrush(colorref(210, 120, 185));
-    let old = SelectObject(hdc, bar_brush);
+    if state.cached_volume_bar_brush.is_invalid() {
+        state.cached_volume_bar_brush = CreateSolidBrush(colorref(210, 120, 185));
+    }
+    let old = SelectObject(hdc, state.cached_volume_bar_brush);
 
     let bar_w = 3;
     let gap = 5;
@@ -697,11 +747,14 @@ unsafe fn paint_volume_bars(
     let center_y = (inner.top + inner.bottom) / 2;
     let max_half = ((inner.bottom - inner.top) / 2 - 2).max(3);
 
-    let levels = if matches!(phase, UiPhase::RecordingPtt | UiPhase::RecordingHandsFree) {
-        meter.bar_levels()
+    let levels = if matches!(
+        state.phase,
+        UiPhase::RecordingPtt | UiPhase::RecordingHandsFree
+    ) {
+        state.meter.bar_levels()
     } else {
         // Processing: gentle decay of last captured levels.
-        meter.bar_levels().map(|l| (l * 0.55).max(0.08))
+        state.meter.bar_levels().map(|l| (l * 0.55).max(0.08))
     };
 
     for (i, level) in levels.iter().enumerate() {
@@ -713,7 +766,6 @@ unsafe fn paint_volume_bars(
     }
 
     let _ = SelectObject(hdc, old);
-    let _ = DeleteObject(bar_brush);
 }
 
 fn colorref(r: u8, g: u8, b: u8) -> COLORREF {

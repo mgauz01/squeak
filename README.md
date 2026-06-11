@@ -69,8 +69,13 @@ Build from source ([Rust](https://rustup.rs/) on Windows): clone, `cargo run --r
 
 ## CI
 
-- **[`ci.yml`](.github/workflows/ci.yml)** — runs on every push to `main` and every pull request targeting `main`: `cargo fmt`, Clippy, and unit tests on Linux.
-- **[`msi.yml`](.github/workflows/msi.yml)** — runs on version tags (`v*`) or manual dispatch: Linux + Windows validation (including ASR smoke/bench on a committed fixture), then builds the MSI only if validation passes.
+- **[`ci.yml`](.github/workflows/ci.yml)** — runs on every push to `main` and every pull request targeting `main`:
+  - **validate-linux** — `cargo fmt`, Clippy, unit tests
+  - **validate-windows** — release compile check, ASR smoke/bench on a committed fixture
+  - **build-msi** — builds the MSI only after both validation jobs pass
+- **[`msi.yml`](.github/workflows/msi.yml)** — runs on version tags (`v*`) or manual dispatch: same validation + MSI build, then uploads the MSI to the GitHub release.
+
+`main` is branch-protected: merges require **validate-linux**, **validate-windows**, and **build-msi** to pass.
 
 See the [Actions](https://github.com/mgauz01/squeak/actions) tab for workflow runs.
 
