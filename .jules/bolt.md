@@ -9,3 +9,7 @@
 ## 2025-05-15 - [On-the-fly Audio Resampling]
 **Learning:** Recording raw high-frequency stereo audio (48kHz) consumes 6x more memory than the ASR engine needs (16kHz mono) and adds significant end-of-dictation latency due to batch processing. State-aware chunked resampling in the audio callback eliminates this delay.
 **Action:** Move mandatory audio format conversions into the live callback. Use stateful resamplers to handle phase and frame boundaries correctly across chunks.
+
+## 2025-05-15 - [GDI Object Caching in Overlay]
+**Learning:** The recording overlay was creating and deleting ~800 GDI objects (brushes/regions) per second during active animations. This creates unnecessary kernel-mode transitions and syscall overhead.
+**Action:** Cache static GDI resources like solid brushes and regions that only change on window resize. Use `OverlayWindowState` to store these and ensure proper cleanup in `free_overlay_state`.
