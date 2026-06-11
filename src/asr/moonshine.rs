@@ -42,7 +42,11 @@ impl MoonshineEngine {
             )));
         }
 
-        info!("Loading Moonshine streaming model from {} ({} threads)", dir.display(), threads);
+        info!(
+            "Loading Moonshine streaming model from {} ({} threads)",
+            dir.display(),
+            threads
+        );
         let inner = StreamingModel::load(dir, threads, &Quantization::default())
             .map_err(|e| AsrError::Transcription(e.to_string()))?;
 

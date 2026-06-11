@@ -35,7 +35,11 @@ impl ParakeetEngine {
             )));
         }
 
-        info!("Loading Parakeet model from {} ({} threads)", dir.display(), threads);
+        info!(
+            "Loading Parakeet model from {} ({} threads)",
+            dir.display(),
+            threads
+        );
         let inner = ParakeetModel::load(dir, threads, &Quantization::Int8)
             .map_err(|e| AsrError::Transcription(e.to_string()))?;
         Ok(Self { inner })

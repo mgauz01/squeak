@@ -19,9 +19,9 @@ pub fn create_engine(
     threads: usize,
 ) -> Result<Box<dyn AsrEngine>, AsrError> {
     match model {
-        AsrModelId::Moonshine(tier) => {
-            Ok(Box::new(MoonshineEngine::load_from_dir(model_dir, tier, threads)?))
-        }
+        AsrModelId::Moonshine(tier) => Ok(Box::new(MoonshineEngine::load_from_dir(
+            model_dir, tier, threads,
+        )?)),
         #[cfg(feature = "parakeet")]
         AsrModelId::Parakeet => Ok(Box::new(ParakeetEngine::load_from_dir(model_dir, threads)?)),
         #[cfg(feature = "cohere")]

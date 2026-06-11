@@ -29,7 +29,11 @@ impl CanaryEngine {
             )));
         }
 
-        info!("Loading Canary model from {} ({} threads)", dir.display(), threads);
+        info!(
+            "Loading Canary model from {} ({} threads)",
+            dir.display(),
+            threads
+        );
         let inner = CanaryModel::load(dir, threads, &Quantization::Int8)
             .map_err(|e| AsrError::Transcription(e.to_string()))?;
         Ok(Self { inner })
