@@ -1,4 +1,3 @@
-#[cfg(windows)]
 pub mod capture;
 #[cfg(windows)]
 pub mod level_meter;
