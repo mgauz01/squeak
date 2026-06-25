@@ -31,7 +31,7 @@ use crate::overlay_grow::{
     animated_scale, display_width, recording_width_fraction, scaled_dimension, OVERLAY_HEIGHT,
     OVERLAY_WIDTH, PILL_CORNER, PILL_MIN_WIDTH,
 };
-use crate::overlay_raster::apply_pill_alpha_mask;
+use crate::overlay_raster::{apply_coverage_mask, pill_coverage_mask};
 use crate::ui_visual::{
     lerp_rgb, phase_display_scale, phase_uses_grow_animation, ptt_hold_fraction, scale_rgb,
     ui_phase, UiPhase,
@@ -77,6 +77,15 @@ struct OverlayWindowState {
     cached_shade_brush: HBRUSH,
     cached_volume_bar_brush: HBRUSH,
     cached_inner_clip: HRGN,
+    /// Cached plasma brushes — recreated at most every 100 ms (10 fps visual).
+    cached_plasma_brushes: Vec<HBRUSH>,
+    last_plasma_update: u64,
+    /// Cached per-pixel coverage mask (keyed by width/height).
+    cached_coverage: Option<Vec<u8>>,
+    cached_coverage_size: (i32, i32),
+    /// Reusable layered bitmap (DIB section + DC) — avoids allocation on every frame.
+    cached_layer: Option<LayeredBitmap>,
+    cached_layer_size: (i32, i32),
 }
 
 pub fn spawn(
@@ -156,6 +165,12 @@ unsafe fn run_overlay(
         cached_shade_brush: HBRUSH::default(),
         cached_volume_bar_brush: HBRUSH::default(),
         cached_inner_clip: HRGN::default(),
+        cached_plasma_brushes: Vec::new(),
+        last_plasma_update: 0,
+        cached_coverage: None,
+        cached_coverage_size: (0, 0),
+        cached_layer: None,
+        cached_layer_size: (0, 0),
     });
     SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(state) as isize);
 
@@ -361,6 +376,11 @@ unsafe fn free_overlay_state(hwnd: HWND) {
         for brush in state.cached_gloss_brushes.drain(..) {
             let _ = DeleteObject(brush);
         }
+        for brush in state.cached_plasma_brushes.drain(..) {
+            if !brush.is_invalid() {
+                let _ = DeleteObject(brush);
+            }
+        }
         if !state.cached_shade_brush.is_invalid() {
             let _ = DeleteObject(state.cached_shade_brush);
         }
@@ -370,6 +390,9 @@ unsafe fn free_overlay_state(hwnd: HWND) {
         if !state.cached_inner_clip.is_invalid() {
             let _ = DeleteObject(state.cached_inner_clip);
         }
+        // Drop cached layer (will run its Drop impl)
+        state.cached_layer = None;
+        state.cached_coverage = None;
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
     }
 }
@@ -409,17 +432,16 @@ unsafe extern "system" fn overlay_wnd_proc(
     }
 }
 
-struct LayeredBitmap<'a> {
+struct LayeredBitmap {
     screen_dc: windows::Win32::Graphics::Gdi::HDC,
     mem_dc: windows::Win32::Graphics::Gdi::HDC,
     old_bitmap: windows::Win32::Graphics::Gdi::HGDIOBJ,
     dib: windows::Win32::Graphics::Gdi::HBITMAP,
     bits: *mut std::ffi::c_void,
     byte_len: usize,
-    _marker: std::marker::PhantomData<&'a ()>,
 }
 
-impl Drop for LayeredBitmap<'_> {
+impl Drop for LayeredBitmap {
     fn drop(&mut self) {
         unsafe {
             let _ = SelectObject(self.mem_dc, self.old_bitmap);
@@ -441,49 +463,63 @@ unsafe fn present_layered_overlay(hwnd: HWND) {
         return;
     }
 
-    let screen_dc = GetDC(HWND::default());
-    if screen_dc.is_invalid() {
-        return;
-    }
+    let state = overlay_state_mut(hwnd).unwrap();
 
-    let mem_dc = CreateCompatibleDC(screen_dc);
-    if mem_dc.is_invalid() {
-        let _ = ReleaseDC(HWND::default(), screen_dc);
-        return;
-    }
+    // Reuse or create the layered bitmap (DIB section + DC) to avoid per-frame allocation.
+    let need_new_layer = state.cached_layer.is_none()
+        || state.cached_layer_size != (width, height);
+    let layer = if need_new_layer {
+        // Clean up old layer
+        state.cached_layer = None;
 
-    let bmi = BITMAPINFO {
-        bmiHeader: BITMAPINFOHEADER {
-            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-            biWidth: width,
-            biHeight: -height,
-            biPlanes: 1,
-            biBitCount: 32,
-            biCompression: BI_RGB.0,
-            ..Default::default()
-        },
-        ..Default::default()
-    };
+        let screen_dc = GetDC(HWND::default());
+        if screen_dc.is_invalid() {
+            return;
+        }
 
-    let mut bits: *mut std::ffi::c_void = std::ptr::null_mut();
-    let dib = match CreateDIBSection(mem_dc, &bmi, DIB_RGB_COLORS, &mut bits, None, 0) {
-        Ok(bitmap) => bitmap,
-        Err(_) => {
-            let _ = DeleteDC(mem_dc);
+        let mem_dc = CreateCompatibleDC(screen_dc);
+        if mem_dc.is_invalid() {
             let _ = ReleaseDC(HWND::default(), screen_dc);
             return;
         }
-    };
 
-    let byte_len = (width * height * 4) as usize;
-    let layer = LayeredBitmap {
-        screen_dc,
-        mem_dc,
-        old_bitmap: SelectObject(mem_dc, dib),
-        dib,
-        bits,
-        byte_len,
-        _marker: std::marker::PhantomData,
+        let bmi = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER {
+                biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: width,
+                biHeight: -height,
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: BI_RGB.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let mut bits: *mut std::ffi::c_void = std::ptr::null_mut();
+        let dib = match CreateDIBSection(mem_dc, &bmi, DIB_RGB_COLORS, &mut bits, None, 0) {
+            Ok(bitmap) => bitmap,
+            Err(_) => {
+                let _ = DeleteDC(mem_dc);
+                let _ = ReleaseDC(HWND::default(), screen_dc);
+                return;
+            }
+        };
+
+        let byte_len = (width * height * 4) as usize;
+        let layer = LayeredBitmap {
+            screen_dc,
+            mem_dc,
+            old_bitmap: SelectObject(mem_dc, dib),
+            dib,
+            bits,
+            byte_len,
+        };
+        state.cached_layer = Some(layer);
+        state.cached_layer_size = (width, height);
+        state.cached_layer.as_mut().unwrap()
+    } else {
+        state.cached_layer.as_mut().unwrap()
     };
 
     if !layer.bits.is_null() {
@@ -492,9 +528,19 @@ unsafe fn present_layered_overlay(hwnd: HWND) {
 
     paint_overlay(hwnd, layer.mem_dc, width, height);
 
+    if state.cached_coverage.is_none() || state.cached_coverage_size != (width, height) {
+        state.cached_coverage = Some(pill_coverage_mask(width, height));
+        state.cached_coverage_size = (width, height);
+    }
+
     if !layer.bits.is_null() {
         let pixels = std::slice::from_raw_parts_mut(layer.bits.cast::<u8>(), layer.byte_len);
-        apply_pill_alpha_mask(pixels, width, height);
+        apply_coverage_mask(
+            pixels,
+            state.cached_coverage.as_ref().unwrap(),
+            width,
+            height,
+        );
     }
 
     let mut window_rect = RECT::default();
@@ -553,7 +599,8 @@ unsafe fn paint_overlay(
         return;
     }
 
-    let tick_s = GetTickCount64() as f64 / 1000.0;
+    let now_ms = GetTickCount64();
+    let tick_s = now_ms as f64 / 1000.0;
     let (inner, inner_r) = inner_pill_geometry(width, height);
 
     // Convex dome: lighter crown, darker base. Silhouette AA is applied after paint.
@@ -593,14 +640,37 @@ unsafe fn paint_overlay(
     }
     let _ = SelectClipRgn(hdc, state.cached_inner_clip);
 
+    // Plasma brushes: update at most every 100 ms (10 fps) instead of every frame.
+    const PLASMA_UPDATE_MS: u64 = 100;
+    let need_plasma_update = state.cached_plasma_brushes.is_empty()
+        || now_ms.saturating_sub(state.last_plasma_update) >= PLASMA_UPDATE_MS;
+    if need_plasma_update {
+        // Clean up old brushes
+        for &brush in &state.cached_plasma_brushes {
+            if !brush.is_invalid() {
+                let _ = DeleteObject(brush);
+            }
+        }
+        state.cached_plasma_brushes.clear();
+
+        let inner_w = inner.right - inner.left;
+        let strip_w = (inner_w + PLASMA_STRIPS - 1) / PLASMA_STRIPS;
+        for i in 0..PLASMA_STRIPS {
+            let x_norm = (i as f32 + 0.5) / PLASMA_STRIPS as f32;
+            let (r, g, b) = plasma_rgb(x_norm, 0.5, tick_s as f32, state.phase);
+            state
+                .cached_plasma_brushes
+                .push(CreateSolidBrush(colorref(r, g, b)));
+        }
+        state.last_plasma_update = now_ms;
+    }
+
     let inner_w = inner.right - inner.left;
     let strip_w = (inner_w + PLASMA_STRIPS - 1) / PLASMA_STRIPS;
     for i in 0..PLASMA_STRIPS {
         let x0 = inner.left + i * strip_w;
         let x1 = (x0 + strip_w).min(inner.right);
-        let x_norm = (i as f32 + 0.5) / PLASMA_STRIPS as f32;
-        let (r, g, b) = plasma_rgb(x_norm, 0.5, tick_s as f32, state.phase);
-        let brush = CreateSolidBrush(colorref(r, g, b));
+        let brush = state.cached_plasma_brushes[i as usize];
         let strip = RECT {
             left: x0,
             top: inner.top,
@@ -608,7 +678,6 @@ unsafe fn paint_overlay(
             bottom: inner.bottom,
         };
         let _ = FillRect(hdc, &strip, brush);
-        let _ = DeleteObject(brush);
     }
 
     // Subtle top gloss (3D dome highlight) + bottom ambient shade.
