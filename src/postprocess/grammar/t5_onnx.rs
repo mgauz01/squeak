@@ -114,12 +114,10 @@ impl T5OnnxGec {
             .map_err(|e| GrammarError::Polish(e.to_string()))?;
 
         let (shape, data) = hidden;
-        let enc_hidden = Tensor::from_array(
-            (
-                (shape[0] as usize, shape[1] as usize, shape[2] as usize),
-                data.to_vec(),
-            ),
-        )
+        let enc_hidden = Tensor::from_array((
+            (shape[0] as usize, shape[1] as usize, shape[2] as usize),
+            data.to_vec(),
+        ))
         .map_err(|e| GrammarError::Polish(e.to_string()))?;
         let enc_mask = Tensor::from_array(([batch, seq_len], attention_mask.to_vec()))
             .map_err(|e| GrammarError::Polish(e.to_string()))?;

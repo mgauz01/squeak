@@ -466,8 +466,7 @@ unsafe fn present_layered_overlay(hwnd: HWND) {
     let state = overlay_state_mut(hwnd).unwrap();
 
     // Reuse or create the layered bitmap (DIB section + DC) to avoid per-frame allocation.
-    let need_new_layer = state.cached_layer.is_none()
-        || state.cached_layer_size != (width, height);
+    let need_new_layer = state.cached_layer.is_none() || state.cached_layer_size != (width, height);
     let layer = if need_new_layer {
         // Clean up old layer
         state.cached_layer = None;
