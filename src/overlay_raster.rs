@@ -46,24 +46,44 @@ pub fn capsule_coverage(px: i32, py: i32, width: i32, height: i32) -> f32 {
     sum / (n * n)
 }
 
-/// Apply premultiplied BGRA alpha mask (Windows 32-bpp DIB byte order).
-pub fn apply_pill_alpha_mask(pixels: &mut [u8], width: i32, height: i32) {
+/// Per-pixel coverage 0..=255 for a pill silhouette (cacheable by width/height).
+pub fn pill_coverage_mask(width: i32, height: i32) -> Vec<u8> {
     let w = width.max(0) as usize;
     let h = height.max(0) as usize;
-    let byte_len = w * h * 4;
-    if pixels.len() < byte_len {
+    let mut mask = vec![0u8; w * h];
+    for y in 0..h {
+        for x in 0..w {
+            let cov = capsule_coverage(x as i32, y as i32, width, height);
+            mask[y * w + x] = (cov * 255.0).round() as u8;
+        }
+    }
+    mask
+}
+
+/// Premultiply painted BGRA pixels using a cached coverage mask.
+pub fn apply_coverage_mask(pixels: &mut [u8], coverage: &[u8], width: i32, height: i32) {
+    let w = width.max(0) as usize;
+    let h = height.max(0) as usize;
+    if pixels.len() < w * h * 4 || coverage.len() < w * h {
         return;
     }
     for y in 0..h {
         for x in 0..w {
-            let cov = capsule_coverage(x as i32, y as i32, width, height);
+            let alpha = coverage[y * w + x];
+            let cov = alpha as f32 / 255.0;
             let i = (y * w + x) * 4;
             pixels[i] = (pixels[i] as f32 * cov).round() as u8;
             pixels[i + 1] = (pixels[i + 1] as f32 * cov).round() as u8;
             pixels[i + 2] = (pixels[i + 2] as f32 * cov).round() as u8;
-            pixels[i + 3] = (cov * 255.0).round() as u8;
+            pixels[i + 3] = alpha;
         }
     }
+}
+
+/// Apply premultiplied BGRA alpha mask (Windows 32-bpp DIB byte order).
+pub fn apply_pill_alpha_mask(pixels: &mut [u8], width: i32, height: i32) {
+    let coverage = pill_coverage_mask(width, height);
+    apply_coverage_mask(pixels, &coverage, width, height);
 }
 
 #[cfg(test)]
@@ -97,5 +117,17 @@ mod tests {
         apply_pill_alpha_mask(&mut px, 126, 36);
         assert_eq!(px[3], 0);
         assert_eq!(px[0], 0);
+    }
+
+    #[test]
+    fn cached_coverage_matches_direct_mask() {
+        let mut direct = vec![255u8; 126 * 36 * 4];
+        apply_pill_alpha_mask(&mut direct, 126, 36);
+
+        let coverage = pill_coverage_mask(126, 36);
+        let mut cached = vec![255u8; 126 * 36 * 4];
+        apply_coverage_mask(&mut cached, &coverage, 126, 36);
+
+        assert_eq!(direct, cached);
     }
 }

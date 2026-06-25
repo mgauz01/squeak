@@ -14,6 +14,7 @@ const REQUIRED_ONNX_FILES: &[&str] = &[
     "config.json",
 ];
 const DECODER_START_TOKEN_ID: i64 = 0;
+const EOS_TOKEN_ID: i64 = 1;
 const MAX_DECODE_LEN: usize = 128;
 
 /// Shared T5 ONNX grammar engine (encoder + merged decoder).
@@ -89,7 +90,7 @@ impl T5OnnxGec {
         &mut self,
         input_ids: &[i64],
         attention_mask: &[i64],
-    ) -> Result<(Array3<f32>, Array2<i64>), GrammarError> {
+    ) -> Result<(Tensor, Tensor), GrammarError> {
         let batch = 1usize;
         let seq_len = input_ids.len();
 
@@ -113,14 +114,15 @@ impl T5OnnxGec {
             .map_err(|e| GrammarError::Polish(e.to_string()))?;
 
         let (shape, data) = hidden;
-        let hidden_states = Array3::from_shape_vec((shape[0], shape[1], shape[2]), data.to_vec())
+        let enc_hidden = Tensor::from_array((
+            (shape[0] as usize, shape[1] as usize, shape[2] as usize),
+            data.to_vec(),
+        ))
+        .map_err(|e| GrammarError::Polish(e.to_string()))?;
+        let enc_mask = Tensor::from_array(([batch, seq_len], attention_mask.to_vec()))
             .map_err(|e| GrammarError::Polish(e.to_string()))?;
 
-        let encoder_attention_mask =
-            Array2::from_shape_vec((batch, seq_len), attention_mask.to_vec())
-                .map_err(|e| GrammarError::Polish(e.to_string()))?;
-
-        Ok((hidden_states, encoder_attention_mask))
+        Ok((enc_hidden, enc_mask))
     }
 
     fn decode_tokens(&self, token_ids: &[i64]) -> Result<String, GrammarError> {
@@ -133,23 +135,13 @@ impl T5OnnxGec {
     fn run_decoder_step(
         &mut self,
         decoder_input: i64,
-        encoder_hidden_states: &Array3<f32>,
-        encoder_attention_mask: &Array2<i64>,
+        enc_hidden: &Tensor,
+        enc_mask: &Tensor,
         past_key_values: Option<&[(Array3<f32>, Array3<f32>)]>,
         use_cache: bool,
     ) -> Result<(i64, Vec<(Array3<f32>, Array3<f32>)>), GrammarError> {
         let decoder_ids = Tensor::from_array(([1usize, 1usize], vec![decoder_input]))
             .map_err(|e| GrammarError::Polish(e.to_string()))?;
-        let enc_mask = Tensor::from_array((
-            encoder_attention_mask.dim(),
-            encoder_attention_mask.iter().copied().collect::<Vec<_>>(),
-        ))
-        .map_err(|e| GrammarError::Polish(e.to_string()))?;
-        let enc_hidden = Tensor::from_array((
-            encoder_hidden_states.dim(),
-            encoder_hidden_states.iter().copied().collect::<Vec<_>>(),
-        ))
-        .map_err(|e| GrammarError::Polish(e.to_string()))?;
         let use_cache_branch =
             Tensor::from_array(([1usize], vec![if use_cache { 1i64 } else { 0i64 }]))
                 .map_err(|e| GrammarError::Polish(e.to_string()))?;
@@ -238,8 +230,7 @@ impl T5OnnxGec {
         }
 
         let (input_ids, attention_mask) = self.encode_input(text)?;
-        let (encoder_hidden_states, encoder_attention_mask) =
-            self.run_encoder(&input_ids, &attention_mask)?;
+        let (enc_hidden, enc_mask) = self.run_encoder(&input_ids, &attention_mask)?;
 
         let mut generated = vec![DECODER_START_TOKEN_ID];
         let mut past_key_values: Option<Vec<(Array3<f32>, Array3<f32>)>> = None;
@@ -249,8 +240,8 @@ impl T5OnnxGec {
             let use_cache = step > 0;
             let (next_token, next_past) = self.run_decoder_step(
                 decoder_input,
-                &encoder_hidden_states,
-                &encoder_attention_mask,
+                &enc_hidden,
+                &enc_mask,
                 past_key_values.as_deref(),
                 use_cache,
             )?;

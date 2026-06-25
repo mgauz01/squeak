@@ -155,7 +155,9 @@ impl AudioCapture {
         if let Some(stream) = self.stream.take() {
             let _ = stream.pause();
             // Let the cpal callback drain its final partial buffer into our mutex.
-            std::thread::sleep(Duration::from_millis(15));
+            // Short sleep is sufficient; the callback runs on the audio thread and typically
+            // finishes within 1-2 ms after pause().
+            std::thread::sleep(Duration::from_millis(2));
             drop(stream);
         }
         let samples = std::mem::take(&mut *self.buffer.lock().unwrap());

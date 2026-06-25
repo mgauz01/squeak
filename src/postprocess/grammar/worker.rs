@@ -18,6 +18,10 @@ enum WorkerCommand {
         model: GrammarModelId,
         reply: Sender<Result<(), GrammarError>>,
     },
+    IsReady {
+        model: GrammarModelId,
+        reply: Sender<bool>,
+    },
     Polish {
         text: String,
         reply: Sender<Result<String, GrammarError>>,
@@ -55,6 +59,21 @@ impl GrammarWorker {
 
     pub fn is_downloading(&self) -> bool {
         self.downloading.load(Ordering::Relaxed)
+    }
+
+    pub fn is_ready(&self, model: GrammarModelId) -> bool {
+        let (reply_tx, reply_rx) = crossbeam_channel::bounded(1);
+        if self
+            .tx
+            .send(WorkerCommand::IsReady {
+                model,
+                reply: reply_tx,
+            })
+            .is_err()
+        {
+            return false;
+        }
+        reply_rx.recv().unwrap_or(false)
     }
 
     pub fn preload_in_background(&self, model: GrammarModelId) {
@@ -134,6 +153,10 @@ fn worker_main(rx: Receiver<WorkerCommand>, downloading: Arc<AtomicBool>) {
                 let result = ensure_ready(&mut state, model, &downloading);
                 let _ = reply.send(result);
             }
+            WorkerCommand::IsReady { model, reply } => {
+                let ready = state.loaded == Some(model) && state.polisher.is_some();
+                let _ = reply.send(ready);
+            }
             WorkerCommand::Polish { text, reply } => {
                 let result = polish_loaded(&mut state, &text, &downloading);
                 let _ = reply.send(result);
@@ -210,16 +233,17 @@ pub fn polish_or_fallback(worker: &GrammarWorker, text: &str, model: GrammarMode
         return text.to_string();
     }
 
-    match worker.ensure_ready(model) {
-        Ok(()) => match worker.polish(text) {
-            Ok(polished) => polished,
-            Err(err) => {
-                warn!("Grammar polish failed, using rules-only text: {err}");
-                text.to_string()
-            }
-        },
-        Err(err) => {
+    if !worker.is_ready(model) {
+        if let Err(err) = worker.ensure_ready(model) {
             warn!("Grammar model not ready, using rules-only text: {err}");
+            return text.to_string();
+        }
+    }
+
+    match worker.polish(text) {
+        Ok(polished) => polished,
+        Err(err) => {
+            warn!("Grammar polish failed, using rules-only text: {err}");
             text.to_string()
         }
     }
