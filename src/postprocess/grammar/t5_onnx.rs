@@ -1,6 +1,5 @@
 use std::path::Path;
 
-use ndarray::{Array2, Array3};
 use ort::session::Session;
 use ort::value::Tensor;
 use tokenizers::Tokenizer;
@@ -132,14 +131,24 @@ impl T5OnnxGec {
             .map_err(|e| GrammarError::Polish(e.to_string()))
     }
 
+    fn kv_tensor(shape: &[usize], data: &[f32]) -> Result<Tensor, GrammarError> {
+        let [d0, d1, d2] = shape else {
+            return Err(GrammarError::Polish(format!(
+                "unexpected KV shape: {shape:?}"
+            )));
+        };
+        Tensor::from_array((*d0, *d1, *d2), data.to_vec())
+            .map_err(|e| GrammarError::Polish(e.to_string()))
+    }
+
     fn run_decoder_step(
         &mut self,
         decoder_input: i64,
         enc_hidden: &Tensor,
         enc_mask: &Tensor,
-        past_key_values: Option<&[(Array3<f32>, Array3<f32>)]>,
+        past_key_values: Option<Vec<(Tensor, Tensor)>>,
         use_cache: bool,
-    ) -> Result<(i64, Vec<(Array3<f32>, Array3<f32>)>), GrammarError> {
+    ) -> Result<(i64, Vec<(Tensor, Tensor)>), GrammarError> {
         let decoder_ids = Tensor::from_array(([1usize, 1usize], vec![decoder_input]))
             .map_err(|e| GrammarError::Polish(e.to_string()))?;
         let use_cache_branch =
@@ -157,18 +166,14 @@ impl T5OnnxGec {
             let past = past_key_values.ok_or_else(|| {
                 GrammarError::Polish("decoder cache branch requested without past keys".into())
             })?;
-            for (layer, (key, value)) in past.iter().enumerate() {
+            for (layer, (key, value)) in past.into_iter().enumerate() {
                 inputs.push((
                     format!("past_key_values.{layer}.decoder.key").into(),
-                    Tensor::from_array((key.dim(), key.iter().copied().collect::<Vec<_>>()))
-                        .map_err(|e| GrammarError::Polish(e.to_string()))?
-                        .into(),
+                    key.into(),
                 ));
                 inputs.push((
                     format!("past_key_values.{layer}.decoder.value").into(),
-                    Tensor::from_array((value.dim(), value.iter().copied().collect::<Vec<_>>()))
-                        .map_err(|e| GrammarError::Polish(e.to_string()))?
-                        .into(),
+                    value.into(),
                 ));
             }
         }
@@ -212,13 +217,10 @@ impl T5OnnxGec {
                 .map_err(|e| GrammarError::Polish(e.to_string()))?;
             let (k_shape, k_data) = key;
             let (v_shape, v_data) = value;
-            let key_arr =
-                Array3::from_shape_vec((k_shape[0], k_shape[1], k_shape[2]), k_data.to_vec())
-                    .map_err(|e| GrammarError::Polish(e.to_string()))?;
-            let val_arr =
-                Array3::from_shape_vec((v_shape[0], v_shape[1], v_shape[2]), v_data.to_vec())
-                    .map_err(|e| GrammarError::Polish(e.to_string()))?;
-            next_past.push((key_arr, val_arr));
+            next_past.push((
+                Self::kv_tensor(k_shape, k_data)?,
+                Self::kv_tensor(v_shape, v_data)?,
+            ));
         }
 
         Ok((next_token, next_past))
@@ -233,7 +235,7 @@ impl T5OnnxGec {
         let (enc_hidden, enc_mask) = self.run_encoder(&input_ids, &attention_mask)?;
 
         let mut generated = vec![DECODER_START_TOKEN_ID];
-        let mut past_key_values: Option<Vec<(Array3<f32>, Array3<f32>)>> = None;
+        let mut past_key_values: Option<Vec<(Tensor, Tensor)>> = None;
 
         for step in 0..MAX_DECODE_LEN {
             let decoder_input = *generated.last().unwrap_or(&DECODER_START_TOKEN_ID);
@@ -242,7 +244,7 @@ impl T5OnnxGec {
                 decoder_input,
                 &enc_hidden,
                 &enc_mask,
-                past_key_values.as_deref(),
+                past_key_values.take(),
                 use_cache,
             )?;
 

@@ -86,6 +86,46 @@ struct OverlayWindowState {
     /// Reusable layered bitmap (DIB section + DC) — avoids allocation on every frame.
     cached_layer: Option<LayeredBitmap>,
     cached_layer_size: (i32, i32),
+    /// ponytail: skip InvalidateRect when visual state unchanged between timer ticks.
+    last_paint_fp: Option<OverlayPaintFp>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct OverlayPaintFp {
+    phase: UiPhase,
+    width: i32,
+    height: i32,
+    plasma_ms: u64,
+    meter: [u16; 5],
+    ptt_milli: u16,
+}
+
+fn overlay_paint_fp(state: &OverlayWindowState, now: u64) -> OverlayPaintFp {
+    let meter = state
+        .meter
+        .bar_levels()
+        .map(|l| (l * 255.0).round().clamp(0.0, 255.0) as u16);
+    let ptt_milli = if state.phase == UiPhase::Armed {
+        (ptt_hold_fraction(state.grow_start_ms, now) * 1000.0).round() as u16
+    } else {
+        0
+    };
+    let plasma_ms = if matches!(
+        state.phase,
+        UiPhase::Armed | UiPhase::RecordingPtt | UiPhase::RecordingHandsFree
+    ) {
+        state.last_plasma_update
+    } else {
+        0
+    };
+    OverlayPaintFp {
+        phase: state.phase,
+        width: state.current_width,
+        height: state.current_height,
+        plasma_ms,
+        meter,
+        ptt_milli,
+    }
 }
 
 pub fn spawn(
@@ -171,6 +211,7 @@ unsafe fn run_overlay(
         cached_coverage_size: (0, 0),
         cached_layer: None,
         cached_layer_size: (0, 0),
+        last_paint_fp: None,
     });
     SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(state) as isize);
 
@@ -309,6 +350,7 @@ unsafe fn apply_overlay_phase(hwnd: HWND, phase: UiPhase) {
 
     match phase {
         UiPhase::Hidden => {
+            state.last_paint_fp = None;
             let _ = ShowWindow(hwnd, SW_HIDE);
         }
         UiPhase::Armed
@@ -419,7 +461,10 @@ unsafe extern "system" fn overlay_wnd_proc(
                     update_pill_geometry(hwnd, state);
                 }
                 if state.phase != UiPhase::Hidden {
-                    let _ = InvalidateRect(hwnd, None, false);
+                    let fp = overlay_paint_fp(state, now);
+                    if state.last_paint_fp != Some(fp) {
+                        let _ = InvalidateRect(hwnd, None, false);
+                    }
                 }
             }
             LRESULT(0)
@@ -564,6 +609,9 @@ unsafe fn present_layered_overlay(hwnd: HWND) {
         Some(&LAYERED_BLEND),
         ULW_ALPHA,
     );
+
+    let now = GetTickCount64();
+    state.last_paint_fp = Some(overlay_paint_fp(state, now));
 }
 
 fn pill_inset_for_height(height: i32) -> i32 {

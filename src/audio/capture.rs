@@ -33,15 +33,22 @@ pub enum AudioError {
 }
 
 #[cfg(windows)]
+struct CaptureState {
+    buffer: Vec<f32>,
+    resampler: OnTheFlyResampler,
+    /// Reused i16→f32 conversion scratch (i16 devices only).
+    i16_scratch: Vec<f32>,
+}
+
+#[cfg(windows)]
 pub struct AudioCapture {
-    buffer: Arc<Mutex<Vec<f32>>>,
+    state: Arc<Mutex<CaptureState>>,
     #[allow(dead_code)]
     input_sample_rate: u32,
     #[allow(dead_code)]
     channels: u16,
     stream: Option<cpal::Stream>,
     level_meter: Option<Arc<AudioLevelMeter>>,
-    resampler: Arc<Mutex<OnTheFlyResampler>>,
 }
 
 #[cfg(windows)]
@@ -66,15 +73,15 @@ impl AudioCapture {
         let channels = config.channels();
 
         Ok(Self {
-            buffer: Arc::new(Mutex::new(Vec::new())),
+            state: Arc::new(Mutex::new(CaptureState {
+                buffer: Vec::new(),
+                resampler: OnTheFlyResampler::new(input_sample_rate, channels),
+                i16_scratch: Vec::new(),
+            })),
             input_sample_rate,
             channels,
             stream: None,
             level_meter,
-            resampler: Arc::new(Mutex::new(OnTheFlyResampler::new(
-                input_sample_rate,
-                channels,
-            ))),
         })
     }
 
@@ -83,7 +90,10 @@ impl AudioCapture {
             return Ok(());
         }
 
-        self.buffer.lock().unwrap().clear();
+        {
+            let mut state = self.state.lock().unwrap();
+            state.buffer.clear();
+        }
         if let Some(meter) = &self.level_meter {
             meter.reset();
         }
@@ -100,12 +110,11 @@ impl AudioCapture {
         self.input_sample_rate = config.sample_rate().0;
         self.channels = config.channels();
         {
-            let mut resampler = self.resampler.lock().unwrap();
-            resampler.reset(self.input_sample_rate, self.channels);
+            let mut state = self.state.lock().unwrap();
+            state.resampler.reset(self.input_sample_rate, self.channels);
         }
 
-        let buffer = Arc::clone(&self.buffer);
-        let resampler = Arc::clone(&self.resampler);
+        let state = Arc::clone(&self.state);
         let level_meter = self.level_meter.clone();
         let sample_format = config.sample_format();
         let stream_config: cpal::StreamConfig = config.clone().into();
@@ -115,9 +124,16 @@ impl AudioCapture {
                 .build_input_stream(
                     &stream_config,
                     move |data: &[f32], _| {
-                        process_and_append(&buffer, &resampler, data);
+                        let mut st = state.lock().unwrap();
+                        let start = st.buffer.len();
+                        let CaptureState {
+                            buffer, resampler, ..
+                        } = &mut *st;
+                        resampler.process_into(data, buffer);
                         if let Some(meter) = &level_meter {
-                            meter.update_from_chunk(data);
+                            if buffer.len() > start {
+                                meter.update_from_chunk(&buffer[start..]);
+                            }
                         }
                     },
                     move |err| warn!("audio stream error: {err}"),
@@ -128,11 +144,20 @@ impl AudioCapture {
                 .build_input_stream(
                     &stream_config,
                     move |data: &[i16], _| {
-                        let converted: Vec<f32> =
-                            data.iter().map(|&s| s as f32 / i16::MAX as f32).collect();
-                        process_and_append(&buffer, &resampler, &converted);
+                        let mut st = state.lock().unwrap();
+                        let CaptureState {
+                            buffer,
+                            resampler,
+                            i16_scratch,
+                        } = &mut *st;
+                        i16_scratch.clear();
+                        i16_scratch.extend(data.iter().map(|&s| s as f32 / i16::MAX as f32));
+                        let start = buffer.len();
+                        resampler.process_into(i16_scratch.as_slice(), buffer);
                         if let Some(meter) = &level_meter {
-                            meter.update_from_chunk(&converted);
+                            if buffer.len() > start {
+                                meter.update_from_chunk(&buffer[start..]);
+                            }
                         }
                     },
                     move |err| warn!("audio stream error: {err}"),
@@ -160,7 +185,7 @@ impl AudioCapture {
             std::thread::sleep(Duration::from_millis(2));
             drop(stream);
         }
-        let samples = std::mem::take(&mut *self.buffer.lock().unwrap());
+        let samples = std::mem::take(&mut self.state.lock().unwrap().buffer);
         Ok(samples)
     }
 
@@ -171,23 +196,10 @@ impl AudioCapture {
     /// Stop capture and discard buffered audio (e.g. after a short tap that never started PTT).
     pub fn disarm(&mut self) {
         self.stream = None;
-        self.buffer.lock().unwrap().clear();
+        self.state.lock().unwrap().buffer.clear();
         if let Some(meter) = &self.level_meter {
             meter.reset();
         }
-    }
-}
-
-#[cfg(windows)]
-fn process_and_append(
-    buffer: &Arc<Mutex<Vec<f32>>>,
-    resampler: &Arc<Mutex<OnTheFlyResampler>>,
-    data: &[f32],
-) {
-    let mut resampler = resampler.lock().unwrap();
-    let processed = resampler.process(data);
-    if !processed.is_empty() {
-        buffer.lock().unwrap().extend_from_slice(&processed);
     }
 }
 
@@ -202,6 +214,8 @@ struct OnTheFlyResampler {
     last_sample: f32,
     /// Partial mono samples from the end of a chunk if it didn't align with channels.
     leftover_samples: Vec<f32>,
+    /// Reused downmix scratch — avoids a per-callback allocation.
+    mono: Vec<f32>,
 }
 
 #[allow(dead_code)]
@@ -213,6 +227,7 @@ impl OnTheFlyResampler {
             src_pos_accum: 0.0,
             last_sample: 0.0,
             leftover_samples: Vec::new(),
+            mono: Vec::new(),
         }
     }
 
@@ -222,92 +237,87 @@ impl OnTheFlyResampler {
         self.src_pos_accum = 0.0;
         self.last_sample = 0.0;
         self.leftover_samples.clear();
+        self.mono.clear();
     }
 
-    fn process(&mut self, data: &[f32]) -> Vec<f32> {
+    /// Downmix to mono + resample to 16 kHz, appending results into `out`.
+    fn process_into(&mut self, data: &[f32], out: &mut Vec<f32>) {
         if data.is_empty() {
-            return Vec::new();
+            return;
         }
+        let ch = self.channels as usize;
 
-        // 1. Downmix to mono (including any leftovers from last time)
-        let mut mono =
-            Vec::with_capacity((data.len() + self.leftover_samples.len()) / self.channels as usize);
+        // 1. Downmix to mono (reusing the scratch buffer) including any leftovers.
+        self.mono.clear();
         let mut idx = 0;
-
-        // Handle leftovers
         if !self.leftover_samples.is_empty() {
-            let needed = self.channels as usize - self.leftover_samples.len();
+            let needed = ch - self.leftover_samples.len();
             if data.len() >= needed {
-                let mut frame = std::mem::take(&mut self.leftover_samples);
-                frame.extend_from_slice(&data[..needed]);
-                mono.push(frame.iter().sum::<f32>() / self.channels as f32);
+                let sum: f32 =
+                    self.leftover_samples.iter().sum::<f32>() + data[..needed].iter().sum::<f32>();
+                self.mono.push(sum / ch as f32);
+                self.leftover_samples.clear();
                 idx = needed;
             } else {
                 self.leftover_samples.extend_from_slice(data);
-                return Vec::new();
+                return;
             }
         }
-
-        // Process remaining full frames
-        let ch = self.channels as usize;
         while idx + ch <= data.len() {
             let frame = &data[idx..idx + ch];
-            mono.push(frame.iter().sum::<f32>() / ch as f32);
+            self.mono.push(frame.iter().sum::<f32>() / ch as f32);
             idx += ch;
         }
-
-        // Save leftovers for next time
         if idx < data.len() {
             self.leftover_samples.extend_from_slice(&data[idx..]);
         }
-
-        if mono.is_empty() {
-            return Vec::new();
+        if self.mono.is_empty() {
+            return;
         }
 
-        // 2. Resample to 16kHz
+        // 2. Resample to 16 kHz.
         if self.input_rate == TARGET_SAMPLE_RATE {
-            self.last_sample = mono[mono.len() - 1];
-            return mono;
+            self.last_sample = self.mono[self.mono.len() - 1];
+            out.extend_from_slice(&self.mono);
+            return;
         }
 
         let ratio = self.input_rate as f64 / TARGET_SAMPLE_RATE as f64;
-
-        // Estimate output length based on accumulated position
         let start_pos = self.src_pos_accum;
-        let end_pos = start_pos + (mono.len() as f64 / ratio);
-
+        let end_pos = start_pos + (self.mono.len() as f64 / ratio);
         let start_idx = start_pos.ceil() as usize;
         let end_idx = end_pos.ceil() as usize;
         let output_len = end_idx.saturating_sub(start_idx);
-
-        let mut out = Vec::with_capacity(output_len);
+        out.reserve(output_len);
 
         for i in 0..output_len {
             let current_output_idx = (start_idx + i) as f64;
             let src_pos = current_output_idx * ratio - (start_pos * ratio);
 
-            let idx = src_pos.floor() as isize;
-            let frac = (src_pos - idx as f64) as f32;
+            let sidx = src_pos.floor() as isize;
+            let frac = (src_pos - sidx as f64) as f32;
 
-            let s0 = if idx < 0 {
+            let s0 = if sidx < 0 {
                 self.last_sample
             } else {
-                mono[idx as usize]
+                self.mono[sidx as usize]
             };
-
-            let s1 = if (idx + 1) as usize >= mono.len() {
-                mono[mono.len() - 1]
+            let s1 = if (sidx + 1) as usize >= self.mono.len() {
+                self.mono[self.mono.len() - 1]
             } else {
-                mono[(idx + 1) as usize]
+                self.mono[(sidx + 1) as usize]
             };
-
             out.push(s0 + frac * (s1 - s0));
         }
 
         self.src_pos_accum = end_pos % 1.0;
-        self.last_sample = mono[mono.len() - 1];
+        self.last_sample = self.mono[self.mono.len() - 1];
+    }
 
+    #[cfg(test)]
+    fn process(&mut self, data: &[f32]) -> Vec<f32> {
+        let mut out = Vec::new();
+        self.process_into(data, &mut out);
         out
     }
 }
