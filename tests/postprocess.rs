@@ -4,6 +4,18 @@ use squeak::postprocess::{
 };
 
 #[test]
+fn collapses_asr_word_stutter_in_pipeline() {
+    let out = postprocess(
+        "Ooh la la la la la la la la la la la",
+        PostProcessOptions {
+            context: InputContext::Prose,
+            ..Default::default()
+        },
+    );
+    assert_eq!(out, "Ooh la la.");
+}
+
+#[test]
 fn ae1_prose_strips_um_and_punctuates() {
     let out = postprocess(
         "um send the report by Friday",

@@ -53,7 +53,46 @@ pub fn postprocess_with_polisher(
         without_fillers
     };
 
-    punctuation::apply_punctuation(&after_grammar, options.context)
+    let collapsed = collapse_word_repeats(&after_grammar, 2);
+    punctuation::apply_punctuation(&collapsed, options.context)
+}
+
+/// Caps consecutive duplicate words (case-insensitive). Safety net for ASR replay.
+fn collapse_word_repeats(text: &str, max_run: usize) -> String {
+    if max_run == 0 {
+        return text.to_string();
+    }
+    let words: Vec<&str> = text.split_whitespace().collect();
+    if words.is_empty() {
+        return String::new();
+    }
+    let mut out = Vec::with_capacity(words.len());
+    let mut run = 0usize;
+    let mut prev_lower: Option<String> = None;
+    for word in words {
+        let lower = word.to_ascii_lowercase();
+        if Some(&lower) == prev_lower.as_ref() {
+            run += 1;
+            if run <= max_run {
+                out.push(word);
+            }
+        } else {
+            prev_lower = Some(lower);
+            run = 1;
+            out.push(word);
+        }
+    }
+    out.join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::collapse_word_repeats;
+
+    #[test]
+    fn collapse_word_repeats_caps_stutter() {
+        assert_eq!(collapse_word_repeats("Ooh la la la la la", 2), "Ooh la la");
+    }
 }
 
 #[cfg(windows)]
@@ -79,5 +118,6 @@ pub fn postprocess_with_worker(
         without_fillers
     };
 
-    punctuation::apply_punctuation(&after_grammar, options.context)
+    let collapsed = collapse_word_repeats(&after_grammar, 2);
+    punctuation::apply_punctuation(&collapsed, options.context)
 }

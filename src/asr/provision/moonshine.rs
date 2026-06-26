@@ -25,6 +25,16 @@ pub const MOONSHINE_REQUIRED_FILES: &[&str] = &[
 /// Alias kept for existing tests and docs.
 pub const REQUIRED_MODEL_FILES: &[&str] = MOONSHINE_REQUIRED_FILES;
 
+/// Int8-quantized component graphs. Optional: extracted and used when present in
+/// the tarball (transcribe-rs prefers `*.int8.ort`), otherwise fp32 `.ort` runs.
+pub const MOONSHINE_INT8_FILES: &[&str] = &[
+    "frontend.int8.ort",
+    "encoder.int8.ort",
+    "adapter.int8.ort",
+    "cross_kv.int8.ort",
+    "decoder_kv.int8.ort",
+];
+
 pub fn is_complete(dir: &Path, _tier: ModelTier) -> bool {
     is_complete_dir(dir, MOONSHINE_REQUIRED_FILES)
 }
@@ -36,7 +46,13 @@ pub fn download_and_extract(
     progress: &impl Fn(DownloadProgress),
 ) -> Result<PathBuf, ModelDownloadError> {
     info!("Downloading Moonshine model ({tier:?}) from {url}");
-    download_tarball_to_dir(target, url, MOONSHINE_REQUIRED_FILES, progress)
+    download_tarball_to_dir_optional(
+        target,
+        url,
+        MOONSHINE_REQUIRED_FILES,
+        MOONSHINE_INT8_FILES,
+        progress,
+    )
 }
 
 pub fn download_tarball_to_dir(

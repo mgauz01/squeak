@@ -464,9 +464,8 @@ impl AppRuntime {
         self.asr
             .preload_in_background(self.config.asr_model(), Some(self.event_tx.clone()));
         self.sync_ui();
-        if self.asr.is_ready(self.config.asr_model()) {
-            overlay::signal_asr_ready(&self.overlay_tx);
-        }
+        // preload emits AsrModelReady (immediately if already loaded), which
+        // drives the overlay grow-completion — no separate readiness probe needed.
         Ok(())
     }
 
@@ -556,17 +555,11 @@ impl AppRuntime {
         if self.asr.is_downloading() {
             return self.fail_processing("model is still downloading");
         }
-
-        if !self.asr.is_ready(model) {
-            self.asr
-                .ensure_ready(model)
-                .map_err(|e| RuntimeError::Message(e.to_string()))?;
-        }
         let prep_ms = prep_start.elapsed().as_millis();
         let trimmed_audio_ms = (samples.len() as u64 * 1000) / TARGET_SAMPLE_RATE as u64;
 
         let asr_start = Instant::now();
-        let raw = self.asr.transcribe(samples).map_err(|e| match e {
+        let raw = self.asr.transcribe(model, samples).map_err(|e| match e {
             AsrError::EmptyAudio => RuntimeError::Message("empty audio".into()),
             AsrError::AudioTooShort { samples, min } => RuntimeError::Message(format!(
                 "recording too short ({samples} samples; hold Win+Ctrl longer and speak before release — need at least {min})"

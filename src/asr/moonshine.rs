@@ -47,7 +47,11 @@ impl MoonshineEngine {
             dir.display(),
             threads
         );
-        let inner = StreamingModel::load(dir, threads, &Quantization::default())
+        // ponytail: request Int8 for ~2-4x faster CPU inference. transcribe-rs
+        // falls back to the fp32 `.ort` when int8 files are absent, so this is a
+        // no-op until int8 assets ship. If int8 accuracy regresses, make the
+        // quantization a config knob.
+        let inner = StreamingModel::load(dir, threads, &Quantization::Int8)
             .map_err(|e| AsrError::Transcription(e.to_string()))?;
 
         Ok(Self { inner, tier, model })

@@ -14,15 +14,12 @@ use crate::asr::provision::{ensure_model, DownloadProgress};
 use crate::config::AsrModelId;
 
 enum WorkerCommand {
-    IsReady {
-        model: AsrModelId,
-        reply: Sender<bool>,
-    },
     EnsureReady {
         model: AsrModelId,
         reply: Sender<Result<(), AsrError>>,
     },
     Transcribe {
+        model: AsrModelId,
         samples: Vec<f32>,
         reply: Sender<Result<String, AsrError>>,
     },
@@ -94,12 +91,6 @@ impl AsrWorker {
     }
 
     pub fn preload_in_background(&self, model: AsrModelId, notify: Option<Sender<AppEvent>>) {
-        if self.is_ready(model) {
-            if let Some(tx) = notify {
-                let _ = tx.send(AppEvent::AsrModelReady);
-            }
-            return;
-        }
         let (reply_tx, reply_rx) = crossbeam_channel::bounded(1);
         if self
             .tx
@@ -126,36 +117,13 @@ impl AsrWorker {
             .ok();
     }
 
-    pub fn is_ready(&self, model: AsrModelId) -> bool {
-        let (reply_tx, reply_rx) = crossbeam_channel::bounded(1);
-        if self
-            .tx
-            .send(WorkerCommand::IsReady {
-                model,
-                reply: reply_tx,
-            })
-            .is_err()
-        {
-            return false;
-        }
-        reply_rx.recv().unwrap_or(false)
-    }
-
-    pub fn ensure_ready(&self, model: AsrModelId) -> Result<(), AsrError> {
-        let (reply_tx, reply_rx) = crossbeam_channel::bounded(1);
-        self.tx
-            .send(WorkerCommand::EnsureReady {
-                model,
-                reply: reply_tx,
-            })
-            .map_err(|_| AsrError::WorkerClosed)?;
-        reply_rx.recv().map_err(|_| AsrError::WorkerClosed)?
-    }
-
-    pub fn transcribe(&self, samples: Vec<f32>) -> Result<String, AsrError> {
+    /// Transcribe on the warm path with a single RPC. The worker lazily loads
+    /// `model` if it isn't the currently-loaded one (cold path only).
+    pub fn transcribe(&self, model: AsrModelId, samples: Vec<f32>) -> Result<String, AsrError> {
         let (reply_tx, reply_rx) = crossbeam_channel::bounded(1);
         self.tx
             .send(WorkerCommand::Transcribe {
+                model,
                 samples,
                 reply: reply_tx,
             })
@@ -207,16 +175,16 @@ fn worker_main(rx: Receiver<WorkerCommand>, downloading: Arc<AtomicBool>, ort: A
 
     for cmd in rx {
         match cmd {
-            WorkerCommand::IsReady { model, reply } => {
-                let ready = state.loaded == Some(model) && state.engine.is_some();
-                let _ = reply.send(ready);
-            }
             WorkerCommand::EnsureReady { model, reply } => {
                 let result = ensure_ready(&mut state, model, &downloading);
                 let _ = reply.send(result);
             }
-            WorkerCommand::Transcribe { samples, reply } => {
-                let result = transcribe_loaded(&mut state, &samples, &downloading);
+            WorkerCommand::Transcribe {
+                model,
+                samples,
+                reply,
+            } => {
+                let result = transcribe_loaded(&mut state, model, &samples, &downloading);
                 let _ = reply.send(result);
             }
             WorkerCommand::Reload { model } => schedule_reload(&mut state, model, None),
@@ -321,6 +289,7 @@ fn warmup_engine(state: &mut WorkerState) {
 
 fn transcribe_loaded(
     state: &mut WorkerState,
+    model: AsrModelId,
     samples: &[f32],
     downloading: &AtomicBool,
 ) -> Result<String, AsrError> {
@@ -328,7 +297,11 @@ fn transcribe_loaded(
         return Err(AsrError::Downloading);
     }
 
-    let model = state.loaded.ok_or(AsrError::NotLoaded)?;
+    // Lazy-load on the cold path (model not preloaded yet or profile just switched).
+    if state.loaded != Some(model) || state.engine.is_none() {
+        ensure_ready(state, model, downloading)?;
+    }
+
     let engine = state.engine.as_mut().ok_or(AsrError::NotLoaded)?;
     match engine.transcribe(samples) {
         Ok(text) => Ok(text),
