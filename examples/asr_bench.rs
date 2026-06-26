@@ -61,9 +61,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     for model in models {
         println!("Model: {}", model.config_key());
-        worker.ensure_ready(model)?;
+        // Warm-load outside the timer (replaces ensure_ready).
+        let _ = worker.transcribe(model, samples.clone())?;
         let start = Instant::now();
-        let text = worker.transcribe(samples.clone())?;
+        let text = worker.transcribe(model, samples.clone())?;
         let elapsed = start.elapsed();
         println!("  Time: {} ms", elapsed.as_millis());
         println!("  Text: {text}");

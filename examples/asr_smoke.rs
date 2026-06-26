@@ -45,12 +45,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let worker =
         squeak::asr::AsrWorker::spawn(squeak::asr::AsrWorkerConfig::from_app_config(&config));
 
-    println!("Ensuring model ({})...", config.asr_model().config_key());
-    worker.ensure_ready(config.asr_model())?;
-
     println!("Transcribing {}...", wav.display());
     let samples = load_wav_mono_16k(wav)?;
-    let text = worker.transcribe(samples)?;
+    let model = config.asr_model();
+    let text = worker.transcribe(model, samples)?;
     println!("Transcript: {text}");
     Ok(())
 }
