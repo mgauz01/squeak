@@ -20,6 +20,8 @@ fn main() {
 
 #[cfg(windows)]
 fn run() -> Result<(), Box<dyn std::error::Error>> {
+    use std::time::Instant;
+
     use squeak::config::GrammarModelId;
     use squeak::postprocess::GrammarWorker;
 
@@ -37,13 +39,39 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     for model in [GrammarModelId::Tiny, GrammarModelId::Coedit] {
         println!("\n=== {} ===", model.config_key());
         worker.ensure_ready(model)?;
+
+        let mut times_ms = Vec::with_capacity(samples.len());
         for sample in &samples {
+            let start = Instant::now();
             let out = worker.polish(sample)?;
+            let elapsed_ms = start.elapsed().as_millis();
+            times_ms.push(elapsed_ms);
             println!("IN:  {sample}");
-            println!("OUT: {out}\n");
+            println!("OUT: {out}");
+            println!("  Time: {elapsed_ms} ms\n");
         }
+
+        print_summary(&times_ms);
         worker.reload(model)?;
     }
 
     Ok(())
+}
+
+#[cfg(windows)]
+fn print_summary(times_ms: &[u128]) {
+    if times_ms.is_empty() {
+        return;
+    }
+    let total: u128 = times_ms.iter().sum();
+    let min = *times_ms.iter().min().unwrap();
+    let max = *times_ms.iter().max().unwrap();
+    let mut sorted = times_ms.to_vec();
+    sorted.sort_unstable();
+    let median = sorted[sorted.len() / 2];
+    let avg = total / times_ms.len() as u128;
+    println!(
+        "Summary ({} samples): total {total} ms, avg {avg} ms, median {median} ms, min {min} ms, max {max} ms",
+        times_ms.len()
+    );
 }
